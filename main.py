@@ -70,6 +70,10 @@ def main():
     print(f"최종 목표 거리: {np.linalg.norm(states[-1, :2] - goal):.4f} m")
     print(f"최소 여유 거리: {clearances.min():.4f} m")
 
+    # controls 배열에서 v가 v_max에 걸린 횟수 출력
+    clipped = np.sum(result["controls"][:, 0] >= cfg.v_max)
+    print(f"action clip 횟수: {clipped} / {len(result['controls'])}")
+
     output_path = Path(__file__).resolve().parent / "mppi_summary.png"
     plot_summary(result, cfg, output_path)
     print("그래프 저장:", output_path)

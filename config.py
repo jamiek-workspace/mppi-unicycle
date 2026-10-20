@@ -4,13 +4,19 @@ H   = 50
 dt  = 0.02
 
 # ── MPPI 핵심 파라미터
-lam       = 1.0
-R         = 1.0
-noise_std = [0.2, 0.8]
+lam       = 3.0
+R_v       = 0.1
+R_omega   = 0.05
+noise_std = [0.1, 0.8]
+
+# ── 제어 입력 제한
+v_min     = 0.0
+v_max     = 1.5
+omega_max = 2.0
 
 # ── 비용 함수
-q_goal      = 1.0
-q_terminal  = 10.0
+q_goal      = 2.0
+q_terminal  = 20.0
 q_obstacle  = 100.0
 q_collision = 10000.0
 margin      = 0.3

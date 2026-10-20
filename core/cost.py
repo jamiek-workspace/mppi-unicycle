@@ -20,7 +20,7 @@ def running_cost(positions, goal, obstacle, cfg):
 def control_cost(controls, noise, cfg):
     u    = controls[None, :, :]
     du   = noise
-    R    = cfg.R
+    R    = np.array([cfg.R_v, cfg.R_omega])  # shape (2,)
     term1 = (1 - 1 / cfg.lam) / 2 * np.sum(du * R * du, axis=2)
     term2 = np.sum(u * R * du, axis=2)
     term3 = 0.5 * np.sum(u * R * u, axis=2)
