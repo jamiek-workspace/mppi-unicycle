@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 결과 이미지
+*.png
+
+# VSCode
+.vscode/
+
+# WSL 관련
+.DS_Store
