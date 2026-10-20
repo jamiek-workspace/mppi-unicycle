@@ -11,7 +11,7 @@ from visualization   import plot_summary
 def run():
     controller = MPPIController(cfg)
     goal       = np.array(cfg.goal)
-    obstacle   = np.array(cfg.obstacle)
+    obstacles  = [np.array(obs) for obs in cfg.obstacles]
     state      = np.array(cfg.initial_state, dtype=float)
 
     states      = [state.copy()]
@@ -26,7 +26,10 @@ def run():
         controls.append(action)
 
         goal_distance = np.linalg.norm(state[:2] - goal)
-        clearance     = np.linalg.norm(state[:2] - obstacle[:2]) - obstacle[2]
+        clearance     = min(
+            np.linalg.norm(state[:2] - obs[:2]) - obs[2]
+            for obs in obstacles
+        )
 
         if k % 20 == 0:
             print(
@@ -56,11 +59,14 @@ def main():
     result   = run()
     states   = result["states"]
     goal     = np.array(cfg.goal)
-    obstacle = np.array(cfg.obstacle)
+    obstacles = [np.array(obs) for obs in cfg.obstacles]
 
-    clearances = (
-        np.linalg.norm(states[:, :2] - obstacle[:2], axis=1)
-        - obstacle[2]
+    clearances = np.min(
+        np.stack([
+            np.linalg.norm(states[:, :2] - obs[:2], axis=1) - obs[2]
+            for obs in obstacles
+        ], axis=1),
+        axis=1,
     )
 
     print("\n종료 이유:", result["stop_reason"])

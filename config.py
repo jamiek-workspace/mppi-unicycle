@@ -23,7 +23,10 @@ margin      = 0.3
 
 # ── 환경
 goal           = [5.0, 0.0]
-obstacle       = [2.5, 0.0, 0.5]
+obstacles      = [
+    [1.8, 0.0, 0.4],   # 배치 2로 복원
+    [3.2, 0.0, 0.4],
+]
 initial_state  = [0.0, 0.0, 0.0]
 goal_tolerance = 0.2
 

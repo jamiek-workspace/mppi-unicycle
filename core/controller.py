@@ -28,7 +28,7 @@ class MPPIController:
             self.controls,
             effective_noise,        # clip 전 noise → effective_noise
             np.array(cfg.goal),
-            np.array(cfg.obstacle),
+            [np.array(obs) for obs in cfg.obstacles],
             cfg,
         )
         updated_controls, weights = update(

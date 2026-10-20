@@ -12,13 +12,16 @@ def plot_summary(result, cfg, output_path):
     controls = result["controls"]
     ess      = np.asarray(result["ess"])
     goal     = np.array(cfg.goal)
-    obstacle = np.array(cfg.obstacle)
+    obstacles = [np.array(obs) for obs in cfg.obstacles]
 
     state_times = np.arange(len(states)) * cfg.dt
     goal_distances = np.linalg.norm(states[:, :2] - goal, axis=1)
-    clearances = (
-        np.linalg.norm(states[:, :2] - obstacle[:2], axis=1)
-        - obstacle[2]
+    clearances = np.min(
+        np.stack([
+            np.linalg.norm(states[:, :2] - obs[:2], axis=1) - obs[2]
+            for obs in obstacles
+        ], axis=1),
+        axis=1,
     )
     min_idx = np.argmin(clearances)
 
@@ -26,15 +29,17 @@ def plot_summary(result, cfg, output_path):
     ax_path, ax_goal, ax_clearance, ax_input = axes.ravel()
 
     # A. 실제 이동 경로
-    ax_path.add_patch(plt.Circle(
-        obstacle[:2], obstacle[2],
-        color="crimson", alpha=0.35, label="Obstacle",
-    ))
-    ax_path.add_patch(plt.Circle(
-        obstacle[:2], obstacle[2] + cfg.margin,
-        fill=False, edgecolor="crimson", linestyle=":",
-        label="Proximity-cost boundary",
-    ))
+    for i, obs in enumerate(obstacles):
+        ax_path.add_patch(plt.Circle(
+            obs[:2], obs[2],
+            color="crimson", alpha=0.35,
+            label="Obstacle" if i == 0 else None,
+        ))
+        ax_path.add_patch(plt.Circle(
+            obs[:2], obs[2] + cfg.margin,
+            fill=False, edgecolor="crimson", linestyle=":",
+            label="Proximity-cost boundary" if i == 0 else None,
+        ))
     ax_path.add_patch(plt.Circle(
         goal, cfg.goal_tolerance,
         color="purple", alpha=0.12, label="Goal tolerance",
