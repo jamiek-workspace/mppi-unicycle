@@ -164,7 +164,7 @@ def run_comparison(seed):
 
 
 def main():
-    seeds = list(range(20))
+    seeds = list(range(50))
 
     results = {"mean": [], "multi": []}
 

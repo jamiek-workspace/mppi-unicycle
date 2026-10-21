@@ -59,7 +59,7 @@ def classify(states, obstacle):
 
 
 def main():
-    seeds    = list(range(20))   # 시드 0~19
+    seeds    = list(range(50))   # 시드 0~49
     goal     = np.array(cfg.goal)
     obstacle = np.array(cfg.obstacle)
 
