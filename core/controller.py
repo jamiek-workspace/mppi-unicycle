@@ -23,14 +23,7 @@ class MPPIController:
             v_max=cfg.v_max,
             omega_max=cfg.omega_max,
         )
-        costs = compute_costs(
-            trajectories,
-            self.controls,
-            effective_noise,        # clip 전 noise → effective_noise
-            np.array(cfg.goal),
-            np.array(cfg.obstacle),
-            cfg,
-        )
+        costs = self.compute_costs(trajectories, effective_noise)
         updated_controls, weights = update(
             self.controls,
             effective_noise,        # clip 전 noise → effective_noise
@@ -49,3 +42,16 @@ class MPPIController:
             updated_controls[-1:],
         ])
         return action
+
+    def compute_costs(self, trajectories, effective_noise):
+        cfg     = self.cfg
+        t_steps = np.arange(1, cfg.H + 1) * cfg.dt   # (H,) 롤아웃 각 스텝의 미래 시각
+        return compute_costs(
+            trajectories,
+            self.controls,
+            effective_noise,        # clip 전 noise → effective_noise
+            np.array(cfg.goal),
+            np.array(cfg.obstacle),
+            cfg,
+            t_steps,
+        )

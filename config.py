@@ -27,6 +27,13 @@ obstacle       = [2.5, 0.0, 0.5]
 initial_state  = [0.0, 0.0, 0.0]
 goal_tolerance = 0.2
 
+# ── 동적 장애물 (등속도 모델)
+obs_velocity = [0.0, -0.4]   # 장애물 속도 [vx, vy] m/s
+obs_dynamic  = False         # False면 기존 정적 동작 그대로
+
+# ── Multimodal MPPI (사전 샘플 분할)
+multimodal_bias = 0.5        # 모드별 omega 노이즈 평균 오프셋 [rad/s]
+
 # ── 시뮬레이션
 max_steps = 300
 seed      = 42

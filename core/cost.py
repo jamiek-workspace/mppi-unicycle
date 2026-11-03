@@ -1,10 +1,14 @@
 import numpy as np
 
-def running_cost(positions, goal, obstacle, cfg):
+def running_cost(positions, goal, obstacle, cfg, t_steps=None):
     goal_cost = cfg.q_goal * np.sum(
         (positions - goal) ** 2, axis=2,
     )
-    center    = obstacle[:2]
+    center    = obstacle[:2]                       # (2,)
+    if t_steps is not None and cfg.obs_dynamic:
+        # 등속도 예측: p_obs(h) = p_obs(0) + v_obs * t_h  → (H, 2)
+        velocity = np.asarray(cfg.obs_velocity)
+        center   = center + velocity * t_steps[:, None]
     radius    = obstacle[2]
     clearance = np.linalg.norm(
         positions - center, axis=2,
@@ -31,9 +35,10 @@ def terminal_cost(final_states, goal, cfg):
         (final_states[:, :2] - goal) ** 2, axis=1,
     )
 
-def compute_costs(trajectories, controls, noise, goal, obstacle, cfg):
+def compute_costs(trajectories, controls, noise, goal, obstacle, cfg,
+                  t_steps=None):
     positions = trajectories[:, 1:, :2]
-    r_cost    = running_cost(positions, goal, obstacle, cfg)
+    r_cost    = running_cost(positions, goal, obstacle, cfg, t_steps)
     c_cost    = control_cost(controls, noise, cfg)
     t_cost    = terminal_cost(trajectories[:, -1, :], goal, cfg)
     return np.sum((r_cost + c_cost) * cfg.dt, axis=1) + t_cost
