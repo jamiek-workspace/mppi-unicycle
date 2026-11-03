@@ -227,3 +227,7 @@ __marimo__/
 
 # WSL 관련
 .DS_Store
+
+*.gif
+*.png
+*.mp4
