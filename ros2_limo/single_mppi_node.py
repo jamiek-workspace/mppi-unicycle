@@ -9,7 +9,10 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path as NavPath
+from geometry_msgs.msg import PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
+from rclpy.qos import QoSProfile, DurabilityPolicy
 
 # 기존 MPPI 코드 가져오기
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 import config as base_cfg
 from core.controller import MPPIController
+from core.dynamics import step_batch
 
 
 def quaternion_to_yaw(q):
@@ -39,6 +43,33 @@ class SingleMPPILimo(Node):
             self.odom_callback,
             10
         )
+
+        viz_qos = QoSProfile(depth=1)
+        viz_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+
+        self.goal_pub = self.create_publisher(
+            Marker, "/mppi/goal_marker", viz_qos
+        )
+        self.tolerance_pub = self.create_publisher(
+            Marker, "/mppi/goal_tolerance", viz_qos
+        )
+        self.path_pub = self.create_publisher(
+            NavPath, "/mppi/actual_path", viz_qos
+        )
+
+        self.predicted_pub = self.create_publisher(
+            NavPath, "/mppi/predicted_path", 10
+        )
+        self.samples_pub = self.create_publisher(
+            MarkerArray, "/mppi/sample_trajectories", 10
+        )
+
+        self.particles_pub = self.create_publisher(
+            Marker, "/mppi/sample_particles", 10
+        )
+
+        self.actual_path = NavPath()
+        self.actual_path.header.frame_id = "odom"
 
         # 기존 설정을 복사하여 테스트용으로 변경
         self.cfg = SimpleNamespace(
@@ -84,6 +115,198 @@ class SingleMPPILimo(Node):
         )
         self.last_odom_time = time.monotonic()
 
+        pose = PoseStamped()
+        pose.header = msg.header
+        pose.header.frame_id = "odom"
+        pose.pose = msg.pose.pose
+
+        self.actual_path.header.stamp = msg.header.stamp
+        self.actual_path.poses.append(pose)
+
+        # RViz2 표시용 최근 5000개 위치 유지
+        if len(self.actual_path.poses) > 5000:
+            self.actual_path.poses.pop(0)
+
+        self.path_pub.publish(self.actual_path)
+
+    def publish_goal_markers(self):
+        if self.goal is None:
+            return
+
+        stamp = self.get_clock().now().to_msg()
+
+        goal = Marker()
+        goal.header.frame_id = "odom"
+        goal.header.stamp = stamp
+        goal.ns = "mppi_goal"
+        goal.id = 0
+        goal.type = Marker.SPHERE
+        goal.action = Marker.ADD
+
+        goal.pose.position.x = float(self.goal[0])
+        goal.pose.position.y = float(self.goal[1])
+        goal.pose.position.z = 0.08
+        goal.pose.orientation.w = 1.0
+
+        goal.scale.x = 0.12
+        goal.scale.y = 0.12
+        goal.scale.z = 0.12
+
+        goal.color.r = 0.1
+        goal.color.g = 0.9
+        goal.color.b = 0.2
+        goal.color.a = 1.0
+
+        self.goal_pub.publish(goal)
+
+        circle = Marker()
+        circle.header.frame_id = "odom"
+        circle.header.stamp = stamp
+        circle.ns = "mppi_tolerance"
+        circle.id = 0
+        circle.type = Marker.LINE_STRIP
+        circle.action = Marker.ADD
+
+        circle.pose.orientation.w = 1.0
+        circle.scale.x = 0.025
+
+        circle.color.r = 0.1
+        circle.color.g = 0.9
+        circle.color.b = 0.2
+        circle.color.a = 0.55
+
+        radius = float(self.cfg.goal_tolerance)
+
+        for i in range(65):
+            angle = 2.0 * math.pi * i / 64
+            point = Point()
+            point.x = float(
+                self.goal[0] + radius * math.cos(angle)
+            )
+            point.y = float(
+                self.goal[1] + radius * math.sin(angle)
+            )
+            point.z = 0.03
+            circle.points.append(point)
+
+        self.tolerance_pub.publish(circle)
+
+    def publish_mppi_visualization(self, state):
+        controller = self.controller
+        if controller is None:
+            return
+
+        stamp = self.get_clock().now().to_msg()
+
+        # 1. 최적화된 제어 시퀀스로 미래 상태 예측
+        controls = controller.last_updated_controls
+        predicted = np.zeros((self.cfg.H + 1, 3))
+        predicted[0] = state
+
+        for i in range(self.cfg.H):
+            control = controls[i].copy()
+            control[0] = np.clip(
+                control[0], self.cfg.v_min, self.cfg.v_max
+            )
+            control[1] = np.clip(
+                control[1],
+                -self.cfg.omega_max,
+                self.cfg.omega_max
+            )
+
+            predicted[i + 1] = step_batch(
+                predicted[i:i + 1],
+                control.reshape(1, 2),
+                self.cfg.dt
+            )[0]
+
+        path = NavPath()
+        path.header.frame_id = "odom"
+        path.header.stamp = stamp
+
+        for x, y, yaw in predicted:
+            pose = PoseStamped()
+            pose.header = path.header
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+            pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+            path.poses.append(pose)
+
+        self.predicted_pub.publish(path)
+
+        # 2. 실제 MPPI 샘플 중 50개 표시
+        trajectories = controller.last_trajectories
+        count = min(50, trajectories.shape[0])
+
+        indices = np.linspace(
+            0, trajectories.shape[0] - 1,
+            count,
+            dtype=int
+        )
+
+        marker_array = MarkerArray()
+
+        for marker_id, sample_idx in enumerate(indices):
+            marker = Marker()
+            marker.header.frame_id = "odom"
+            marker.header.stamp = stamp
+            marker.ns = "mppi_samples"
+            marker.id = marker_id
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.008
+            marker.color.r = 0.2
+            marker.color.g = 0.5
+            marker.color.b = 1.0
+            marker.color.a = 0.28
+
+            for x, y, _ in trajectories[sample_idx]:
+                point = Point()
+                point.x = float(x)
+                point.y = float(y)
+                point.z = 0.025
+                marker.points.append(point)
+
+            marker_array.markers.append(marker)
+
+        self.samples_pub.publish(marker_array)
+
+        # 미래 2초 시점의 모든 샘플 상태를 Particle로 표시
+        future_step = min(
+            round(2.0 / self.cfg.dt),
+            trajectories.shape[1] - 1
+        )
+        particles = trajectories[:, future_step, :2]
+
+        marker = Marker()
+        marker.header.frame_id = "odom"
+        marker.header.stamp = stamp
+        marker.ns = "mppi_particles"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.018
+        marker.scale.y = 0.018
+
+        marker.color.r = 0.2
+        marker.color.g = 0.5
+        marker.color.b = 1.0
+        marker.color.a = 0.65
+
+        for x, y in particles:
+            point = Point()
+            point.x = float(x)
+            point.y = float(y)
+            point.z = 0.05
+            marker.points.append(point)
+
+        self.particles_pub.publish(marker)
+
     def stop_robot(self):
         self.cmd_pub.publish(Twist())
 
@@ -124,15 +347,22 @@ class SingleMPPILimo(Node):
 
             self.cfg.goal = self.goal.tolist()
 
-            # 첫 실험에서는 장애물 비용이 영향을 주지 않도록
-            # 가상 장애물을 목표점에서 충분히 멀리 배치
+            # Gazebo 정적 원기둥 장애물
+            # 실제 반경 0.20m + LIMO 근사 반경 0.17m
             self.cfg.obstacle = [
-                float(x + 100.0),
-                float(y + 100.0),
-                0.1
+                0.50,
+                0.35,
+                0.37
             ]
 
+            self.get_logger().info(
+                f"Obstacle: ({self.cfg.obstacle[0]:.2f}, "
+                f"{self.cfg.obstacle[1]:.2f}), "
+                f"effective radius={self.cfg.obstacle[2]:.2f}m"
+            )
+
             self.controller = MPPIController(self.cfg)
+            self.publish_goal_markers()
 
             # 초기 제어 시퀀스 제한
             self.controller.controls[:, 0] = 0.1
@@ -200,6 +430,10 @@ class SingleMPPILimo(Node):
 
         self.cmd_pub.publish(cmd)
         self.step_count += 1
+
+        # 매 3번째 제어 주기마다 RViz2 시각화 갱신
+        if self.step_count % 3 == 0:
+            self.publish_mppi_visualization(self.state.copy())
 
         if self.step_count % 10 == 0:
             self.get_logger().info(

@@ -30,6 +30,12 @@ class MPPIController:
             costs,
             cfg,
         )
+        # RViz2 시각화용 결과 저장 (제어 계산에는 영향 없음)
+        self.last_trajectories = trajectories
+        self.last_updated_controls = updated_controls.copy()
+        self.last_weights = weights.copy()
+        self.last_costs = costs.copy()
+
         ess = 1.0 / np.sum(weights ** 2)
         self.weights_history.append(weights)
         self.ess_history.append(ess)
