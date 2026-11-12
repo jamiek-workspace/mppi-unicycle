@@ -29,6 +29,32 @@ def quaternion_to_yaw(q):
         1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     )
 
+def cost_to_color(normalized_cost):
+    """
+    Normalized cost [0, 1] -> RGB
+    Low cost: light green
+    High cost: dark blue
+    """
+    colors = np.array([
+        [0.84, 0.96, 0.60],
+        [0.63, 0.87, 0.52],
+        [0.30, 0.75, 0.61],
+        [0.14, 0.55, 0.69],
+        [0.09, 0.24, 0.58],
+    ])
+
+    t = float(np.clip(normalized_cost, 0.0, 1.0))
+    pos = t * (len(colors) - 1)
+
+    i = min(int(pos), len(colors) - 2)
+    fraction = pos - i
+
+    rgb = (
+        colors[i] * (1.0 - fraction)
+        + colors[i + 1] * fraction
+    )
+
+    return rgb
 
 class SingleMPPILimo(Node):
     def __init__(self):
@@ -235,15 +261,31 @@ class SingleMPPILimo(Node):
 
         self.predicted_pub.publish(path)
 
-        # 2. 실제 MPPI 샘플 중 50개 표시
+        # 2. Cost-colored sampled trajectories
         trajectories = controller.last_trajectories
-        count = min(50, trajectories.shape[0])
+        costs = np.asarray(controller.last_costs)
+
+        # 우선 100개 표시
+        count = min(100, trajectories.shape[0])
 
         indices = np.linspace(
-            0, trajectories.shape[0] - 1,
+            0,
+            trajectories.shape[0] - 1,
             count,
             dtype=int
         )
+
+        # 전체 샘플의 Cost 기준으로 정규화
+        finite_costs = costs[np.isfinite(costs)]
+
+        if finite_costs.size > 0:
+            cost_min = float(np.min(finite_costs))
+            cost_max = float(np.max(finite_costs))
+        else:
+            cost_min = 0.0
+            cost_max = 1.0
+
+        cost_range = max(cost_max - cost_min, 1e-9)
 
         marker_array = MarkerArray()
 
@@ -251,17 +293,32 @@ class SingleMPPILimo(Node):
             marker = Marker()
             marker.header.frame_id = "odom"
             marker.header.stamp = stamp
+
             marker.ns = "mppi_samples"
             marker.id = marker_id
             marker.type = Marker.LINE_STRIP
             marker.action = Marker.ADD
             marker.pose.orientation.w = 1.0
 
+            # 선 두께
             marker.scale.x = 0.008
-            marker.color.r = 0.2
-            marker.color.g = 0.5
-            marker.color.b = 1.0
-            marker.color.a = 0.28
+
+            # Cost -> RGB
+            cost = float(costs[sample_idx])
+
+            if np.isfinite(cost):
+                normalized_cost = (
+                    (cost - cost_min) / cost_range
+                )
+            else:
+                normalized_cost = 1.0
+
+            r, g, b = cost_to_color(normalized_cost)
+
+            marker.color.r = float(r)
+            marker.color.g = float(g)
+            marker.color.b = float(b)
+            marker.color.a = 0.65
 
             for x, y, _ in trajectories[sample_idx]:
                 point = Point()
@@ -271,6 +328,14 @@ class SingleMPPILimo(Node):
                 marker.points.append(point)
 
             marker_array.markers.append(marker)
+
+        # 이전 프레임에서 남은 Marker 제거
+        delete_marker = Marker()
+        delete_marker.header.frame_id = "odom"
+        delete_marker.header.stamp = stamp
+        delete_marker.action = Marker.DELETEALL
+
+        marker_array.markers.insert(0, delete_marker)
 
         self.samples_pub.publish(marker_array)
 
