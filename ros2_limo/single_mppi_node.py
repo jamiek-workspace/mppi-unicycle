@@ -279,8 +279,9 @@ class SingleMPPILimo(Node):
         finite_costs = costs[np.isfinite(costs)]
 
         if finite_costs.size > 0:
-            cost_min = float(np.min(finite_costs))
-            cost_max = float(np.max(finite_costs))
+            # 개선안: 충돌 outlier를 무시하고 95th percentile을 최대값으로 사용
+            cost_min = float(np.percentile(finite_costs, 5))
+            cost_max = float(np.percentile(finite_costs, 95))
         else:
             cost_min = 0.0
             cost_max = 1.0
