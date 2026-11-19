@@ -13,6 +13,7 @@ from nav_msgs.msg import Odometry, Path as NavPath
 from geometry_msgs.msg import PoseStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.qos import QoSProfile, DurabilityPolicy
+from std_msgs.msg import Float32
 
 # 기존 MPPI 코드 가져오기
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +64,13 @@ class SingleMPPILimo(Node):
         self.cmd_pub = self.create_publisher(
             Twist, "/cmd_vel", 10
         )
+
+        self.compute_time_pub = self.create_publisher(
+            Float32,
+            "/mppi/compute_time_ms",
+            10
+        )
+
         self.odom_sub = self.create_subscription(
             Odometry,
             "/model/limo_diff/odometry",
@@ -86,6 +94,7 @@ class SingleMPPILimo(Node):
         self.predicted_pub = self.create_publisher(
             NavPath, "/mppi/predicted_path", 10
         )
+        
         self.samples_pub = self.create_publisher(
             MarkerArray, "/mppi/sample_trajectories", 10
         )
@@ -468,6 +477,10 @@ class SingleMPPILimo(Node):
             return
 
         compute_time = time.monotonic() - start_compute
+
+        compute_msg = Float32()
+        compute_msg.data = float(compute_time * 1000.0)
+        self.compute_time_pub.publish(compute_msg)
 
         # 계산이 지나치게 오래 걸리면 정지
         if compute_time > 0.3:
