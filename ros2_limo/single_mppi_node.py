@@ -22,6 +22,8 @@ sys.path.insert(0, str(ROOT))
 import config as base_cfg
 from core.controller import MPPIController
 from core.dynamics import step_batch
+from core.dynamic_obstacles import EXPERIMENTS, MultiObstacleController
+from spawn_dynamic_obstacles import obstacle_topic
 
 
 def quaternion_to_yaw(q):
@@ -122,7 +124,37 @@ class SingleMPPILimo(Node):
         self.cfg.omega_max = 0.5
         self.cfg.noise_std = [0.08, 0.3]
         self.cfg.goal_tolerance = 0.15
-        self.cfg.obs_dynamic = False
+
+        scenario = self.declare_parameter("obstacle_scenario", "").value.upper()
+        if scenario and scenario not in EXPERIMENTS:
+            raise ValueError("obstacle_scenario must be A, B, C or empty")
+
+        self.experiment = EXPERIMENTS.get(scenario)
+        self.cfg.obs_dynamic = self.declare_parameter("predict_obstacles", True).value
+        self.cfg.seed = self.declare_parameter("seed", base_cfg.seed).value
+        self.speed_scale = self.declare_parameter("obstacle_speed_scale", 0.15).value
+        if not math.isfinite(self.speed_scale) or self.speed_scale <= 0:
+            raise ValueError("obstacle_speed_scale must be finite and positive")
+
+        self.obstacle_states = {}
+        self.obstacle_cmds = []
+        self.min_clearance = math.inf
+        if self.experiment:
+            self.clearance_pub = self.create_publisher(Float32, "/mppi/clearance_m", 10)
+            for index in range(len(self.experiment["obstacles"])):
+                self.obstacle_cmds.append(
+                    self.create_publisher(Twist, obstacle_topic(index, "cmd_vel"), 10)
+                )
+                self.create_subscription(
+                    Odometry, obstacle_topic(index, "odometry"),
+                    lambda msg, index=index: self.obstacle_callback(index, msg), 10,
+                )
+            self.get_logger().info(
+                f"Scenario {scenario}, prediction={self.cfg.obs_dynamic}, "
+                f"seed={self.cfg.seed}, obstacle speed scale={self.speed_scale:.3f}"
+            )
+        else:
+            self.cfg.obs_dynamic = False
 
         self.state = None
         self.last_odom_time = None
@@ -139,6 +171,30 @@ class SingleMPPILimo(Node):
         self.get_logger().info(
             "Single MPPI LIMO node ready. Waiting for odometry."
         )
+
+    def obstacle_callback(self, index, msg):
+        pose = msg.pose.pose
+        velocity = msg.twist.twist.linear
+        yaw = quaternion_to_yaw(pose.orientation)
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+        # Odometry twist is expressed in the child frame. Spawn LIMO at
+        # world (0, 0, yaw=0) so world XY and the LIMO odom XY coincide.
+        vx = cos_yaw * velocity.x - sin_yaw * velocity.y
+        vy = sin_yaw * velocity.x + cos_yaw * velocity.y
+        radius = self.experiment["obstacles"][index][2] + 0.17
+        self.obstacle_states[index] = (
+            [pose.position.x, pose.position.y, radius], [vx, vy], time.monotonic()
+        )
+
+    def command_obstacles(self, elapsed):
+        # Stretch the scenario in time by the same factor used to slow it down.
+        step = int(elapsed * self.speed_scale / base_cfg.dt + 1e-9)
+        velocities = self.experiment["velocity"](step) * self.speed_scale
+        for publisher, (vx, vy) in zip(self.obstacle_cmds, velocities):
+            cmd = Twist()
+            cmd.linear.x = float(vx)
+            cmd.linear.y = float(vy)
+            publisher.publish(cmd)
 
     def odom_callback(self, msg):
         p = msg.pose.pose.position
@@ -384,11 +440,22 @@ class SingleMPPILimo(Node):
 
     def stop_robot(self):
         self.cmd_pub.publish(Twist())
+        for publisher in self.obstacle_cmds:
+            publisher.publish(Twist())
+
+    def run_time(self):
+        if self.experiment:
+            return self.get_clock().now().nanoseconds / 1e9
+        return time.monotonic()
 
     def finish(self, reason):
         if not self.finished:
             self.finished = True
             self.stop_robot()
+            if self.experiment and self.started_at is not None:
+                elapsed = self.run_time() - self.started_at
+                reason += (f" | elapsed={elapsed:.2f}s | "
+                           f"minimum clearance={self.min_clearance:+.3f}m")
             self.get_logger().info(reason)
 
     def control_step(self):
@@ -406,44 +473,40 @@ class SingleMPPILimo(Node):
             self.finish("Odometry timeout. Robot stopped.")
             return
 
+        if self.experiment and (
+            len(self.obstacle_states) != len(self.obstacle_cmds)
+            or any(now - sample[2] > 0.5 for sample in self.obstacle_states.values())
+        ):
+            if self.controller is not None:
+                self.finish("Obstacle odometry timeout. Robot stopped.")
+            return
+
         # 초기 위치 기준 목표점 설정
         if self.controller is None:
             x, y, yaw = self.state
 
-            # 로봇 초기 자세 기준:
-            # 전방 1.0m, 왼쪽 0.7m
-            forward = 1.0
-            left = 0.7
-
-            self.goal = np.array([
-                x + forward * math.cos(yaw) - left * math.sin(yaw),
-                y + forward * math.sin(yaw) + left * math.cos(yaw)
-            ])
+            if self.experiment:
+                self.goal = np.array(base_cfg.goal)
+                self.controller = MultiObstacleController(self.cfg)
+            else:
+                # 로봇 초기 자세 기준 전방 1.0m, 왼쪽 0.7m.
+                self.goal = np.array([
+                    x + math.cos(yaw) - 0.7 * math.sin(yaw),
+                    y + math.sin(yaw) + 0.7 * math.cos(yaw),
+                ])
+                # Gazebo 정적 원기둥: 실제 반경 0.20m + LIMO 근사 반경 0.17m.
+                self.cfg.obstacle = [0.50, 0.35, 0.37]
+                self.get_logger().info("Obstacle: (0.50, 0.35), effective radius=0.37m")
+                self.controller = MPPIController(self.cfg)
 
             self.cfg.goal = self.goal.tolist()
-
-            # Gazebo 정적 원기둥 장애물
-            # 실제 반경 0.20m + LIMO 근사 반경 0.17m
-            self.cfg.obstacle = [
-                0.50,
-                0.35,
-                0.37
-            ]
-
-            self.get_logger().info(
-                f"Obstacle: ({self.cfg.obstacle[0]:.2f}, "
-                f"{self.cfg.obstacle[1]:.2f}), "
-                f"effective radius={self.cfg.obstacle[2]:.2f}m"
-            )
-
-            self.controller = MPPIController(self.cfg)
             self.publish_goal_markers()
 
             # 초기 제어 시퀀스 제한
             self.controller.controls[:, 0] = 0.1
             self.controller.controls[:, 1] = 0.0
 
-            self.started_at = now
+            self.started_at = self.run_time()
 
             self.get_logger().info(
                 f"Start: ({x:.2f}, {y:.2f}) "
@@ -452,7 +515,26 @@ class SingleMPPILimo(Node):
             )
             return
 
-        if now - self.started_at > 30.0:
+        elapsed = self.run_time() - self.started_at
+        if elapsed < 0.0:
+            self.finish("Clock reset. Restart the controller for a new run.")
+            return
+
+        if self.experiment:
+            samples = [self.obstacle_states[index] for index in range(len(self.obstacle_cmds))]
+            self.controller.obstacles = np.array([sample[0] for sample in samples])
+            self.controller.velocities = np.array([sample[1] for sample in samples])
+            obstacles = self.controller.obstacles
+            clearance = float(np.min(
+                np.linalg.norm(self.state[:2] - obstacles[:, :2], axis=1) - obstacles[:, 2]
+            ))
+            self.min_clearance = min(self.min_clearance, clearance)
+            self.clearance_pub.publish(Float32(data=clearance))
+            if clearance <= 0.0:
+                self.finish("Estimated footprint overlap.")
+                return
+
+        if elapsed > (60.0 if self.experiment else 30.0):
             self.finish("Maximum test duration reached.")
             return
 
@@ -465,6 +547,9 @@ class SingleMPPILimo(Node):
                 f"Goal reached! Distance: {distance:.3f} m"
             )
             return
+
+        if self.experiment:
+            self.command_obstacles(elapsed)
 
         start_compute = time.monotonic()
 
