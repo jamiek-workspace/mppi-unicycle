@@ -111,6 +111,29 @@ prepare_trial() {
     return 1
   fi
 
+  local -a expected_models=(limo_diff mppi_obstacle_0 mppi_obstacle_1)
+  if [[ $scenario == CORRIDOR ]]; then
+    expected_models+=(mppi_obstacle_2 mppi_obstacle_3)
+  fi
+  local model_log="$trial_logs/gazebo-models.log"
+  local -a missing_models
+  local name
+  for _ in {1..4}; do
+    missing_models=()
+    timeout 4s gz model --list > "$model_log" 2>&1 || true
+    for name in "${expected_models[@]}"; do
+      if ! grep -Eq "^[[:space:]]*-[[:space:]]+$name[[:space:]]*$" "$model_log"; then
+        missing_models+=("$name")
+      fi
+    done
+    if (( ${#missing_models[@]} == 0 )); then break; fi
+    sleep 0.25
+  done
+  if (( ${#missing_models[@]} > 0 )); then
+    echo "Missing Gazebo models: ${missing_models[*]}. See $model_log and $trial_logs/obstacles.log." >&2
+    return 1
+  fi
+
   wait_for_topic /clock rosgraph_msgs/msg/Clock || return 1
   wait_for_topic /model/limo_diff/odometry nav_msgs/msg/Odometry || return 1
   if [[ $scenario == CORRIDOR ]]; then
