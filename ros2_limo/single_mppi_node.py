@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from rclpy.impl.implementation_singleton import rclpy_implementation
 from rclpy.clock import Clock, ClockType
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path as NavPath
@@ -642,10 +644,6 @@ class SingleMPPILimo(Node):
                 f"compute={compute_time * 1000:.1f} ms"
             )
 
-    def destroy_node(self):
-        self.stop_robot()
-        return super().destroy_node()
-
 
 def main():
     rclpy.init()
@@ -653,12 +651,21 @@ def main():
 
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except rclpy_implementation.RCLError:
+        if rclpy.ok():
+            raise
     finally:
-        node.stop_robot()
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            if rclpy.ok():
+                node.stop_robot()
+        except rclpy_implementation.RCLError:
+            if rclpy.ok():
+                raise
+        finally:
+            node.destroy_node()
+            rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
