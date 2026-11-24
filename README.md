@@ -71,9 +71,9 @@ bash ros2_limo/run_experiment.sh CORRIDOR 0.2
 ```
 
 스크립트가 Gazebo 서버와 GUI, LIMO와 원통의 스폰, 브리지, RViz,
-PlotJuggler를 띄운다. 필요한 ROS 메시지를 수신한 뒤 MPPI를 시작한다.
-같은 터미널에서 Enter를 누르면 새 Gazebo 월드에서 같은 실험을
-반복한다. RViz와 PlotJuggler는 열린 상태로 유지된다. `q` 후
+PlotJuggler를 띄운다. 필요한 ROS 메시지를 수신하면 시작 입력을 기다린다.
+Gazebo 창에서 카메라 구도를 잡고 터미널에서 Enter를 눌러 MPPI를 시작한다.
+실험 후 Enter를 누르면 새 Gazebo 월드가 준비되고 다시 시작 입력을 기다린다. RViz와 PlotJuggler는 열린 상태로 유지된다. `q` 후
 Enter 또는 Ctrl+C로 종료한다.
 
 기본 LIMO 모델 경로는
