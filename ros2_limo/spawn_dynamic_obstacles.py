@@ -56,6 +56,7 @@ def main():
         moving = corridor and index < 2
         subprocess.run(
             ["ros2", "run", "ros_gz_sim", "create", "-world", args.world,
+             "-name", f"mppi_obstacle_{index}",
              "-string", cylinder_sdf(index, radius, moving, physical_collision=not corridor),
              "-x", str(x), "-y", str(y), "-z", "0.3"],
             check=True,
