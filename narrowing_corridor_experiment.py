@@ -8,7 +8,7 @@
 → 중앙은 막히고, 벽과 장애물 사이의 위/아래 통로가 각각 gap 폭으로 남음
   위쪽 통로 폭 = (wall_top_y - wall_r) - (obs1_stop_y + obs_r) = gap
 
-난이도 스윕: gap = 0.5, 0.3, 0.2, 0.1 m, 각 gap에서 시드 0~49
+난이도 스윕: gap = 0.3, 0.2, 0.15, 0.1 m, 각 gap에서 시드 0~49
 비교: 단일 MPPI vs Multimodal MPPI (양쪽 업데이트 + bias decay), obs_dynamic=True
       장애물 4개 비용을 각각 계산해서 합산 (MultiObstacleController 재사용)
       롤아웃 예측도 같은 정지 모델 사용: predicted_y = clip(y + v_y * t, lo, hi)
@@ -25,7 +25,10 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 import config
-from dynamic_obstacle_experiment import MultiObstacleController
+from core.dynamic_obstacles import (
+    CORRIDOR_GAPS, CORRIDOR_SPEED as V_Y, MultiObstacleController,
+    clipped_prediction, make_corridor as make_env, stop_y,
+)
 from multimodal_dynamic_experiment import (
     BIAS_DECAY_DIST, CROSS, FAIL, GRID, INK, K_UPPER, METHOD_COLORS, OBS_GRAY,
     PATH_COLORS, MultimodalController, run_env, style_axis, summarize,
@@ -34,63 +37,10 @@ from multimodal_dynamic_experiment import (
 # 위/아래 통로 폭 (작을수록 어려움)
 # 최대 0.3 m: 더 넓히려면 obs1/obs2가 중심선을 넘어 교차해야 하는데,
 # 그러면 반대쪽 장애물이 통로를 막아 실제 폭이 오히려 줄어든다 (gap 0.5 → 실제 0.1)
-GAPS     = (0.3, 0.2, 0.15, 0.1)
+GAPS     = CORRIDOR_GAPS
 PATH_GAPS = (0.2, 0.1)            # 경로 패널을 그릴 gap
-V_Y      = 0.5                    # 동적 장애물 속도 [m/s]
 METHODS  = ("single", "mm_both")
 LABELS   = {"single": "Single MPPI", "mm_both": "Multimodal MPPI"}
-
-WALL_Y, WALL_R = 1.1, 0.4
-OBS_Y0, OBS_R  = 0.6, 0.4
-X_CENTER       = 2.5
-
-
-def stop_y(gap):
-    """위쪽 통로 폭이 gap이 되는 obs1 정지 y (obs2는 부호 반대)"""
-    y = (WALL_Y - WALL_R) - gap - OBS_R
-    assert y >= 0.0, f"gap {gap} m는 이 배치에서 만들 수 없음 (장애물이 중심선을 넘어 교차)"
-    return y
-
-
-def make_env(gap):
-    """장애물 순서: obs1, obs2, wall_top, wall_bottom (회피 방향은 obs1 기준으로 분류)"""
-    s = stop_y(gap)
-    return {
-        "obstacles": [[X_CENTER, +OBS_Y0, OBS_R], [X_CENTER, -OBS_Y0, OBS_R],
-                      [X_CENTER, +WALL_Y, WALL_R], [X_CENTER, -WALL_Y, WALL_R]],
-        "velocity":  lambda k: np.array([[0.0, -V_Y], [0.0, +V_Y], [0.0, 0.0], [0.0, 0.0]]),
-        "y_limits":  [(s, OBS_Y0), (-OBS_Y0, -s), (WALL_Y, WALL_Y), (-WALL_Y, -WALL_Y)],
-    }
-
-
-def clipped_prediction(base):
-    """
-    롤아웃 비용의 장애물 예측에도 정지 모델 적용
-    core.cost는 선형 예측 p0 + v * t만 지원하므로, clip된 예측 위치 p(t)를
-    스텝별 유효 속도 (p(t) - p0) / t, shape (H, 2)로 바꿔 넘긴다
-    → core.cost 안에서 p0 + v_eff * t = p(t)
-    """
-    class ClippedPrediction(base):
-        def __init__(self, cfg, y_limits, **kwargs):
-            super().__init__(cfg, **kwargs)
-            self.y_limits = np.array(y_limits)   # (N, 2)
-
-        def compute_costs(self, trajectories, effective_noise):
-            t_steps  = np.arange(1, self.cfg.H + 1) * self.cfg.dt
-            observed = self.velocities
-            p0       = self.obstacles[:, None, :2]                           # (N, 1, 2)
-            pred     = p0 + observed[:, None, :] * t_steps[None, :, None]    # (N, H, 2)
-            lo, hi   = self.y_limits.T
-            pred[:, :, 1] = np.clip(pred[:, :, 1], lo[:, None], hi[:, None])
-            self.velocities = (pred - p0) / t_steps[None, :, None]           # (N, H, 2)
-            try:
-                return super().compute_costs(trajectories, effective_noise)
-            finally:
-                self.velocities = observed
-
-    ClippedPrediction.__name__ = f"Clipped{base.__name__}"
-    return ClippedPrediction
-
 
 ClippedSingle     = clipped_prediction(MultiObstacleController)
 ClippedMultimodal = clipped_prediction(MultimodalController)
