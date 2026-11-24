@@ -60,52 +60,47 @@ python compare_multimodal.py
 - ROS2 Jazzy 연동
 - VLA + Multimodal MPPI 연동
 
-## Gazebo Harmonic에서 동적 장애물 비교
+## Gazebo Harmonic 실험
 
-ROS 2 Jazzy 환경에서 기존 LIMO 모델과 `/cmd_vel`,
-`/model/limo_diff/odometry` 브리지를 사용한다. 정적 원기둥이 없는
-Gazebo 월드를 열고 LIMO를 월드 원점 `(x=0, y=0, yaw=0)`에 스폰한다.
-실험에서는 LIMO odom의 XY 원점과 방향이 Gazebo 월드와 일치해야 한다.
-실험 목표는 2D와 동일하게 `(5.0, 0.0)`이다.
+Gazebo에서 LIMO를 월드 원점 (x=0, y=0, yaw=0)에 스폰하고 재생한다.
+각 터미널에서 ROS 2 Jazzy 환경을 source하고 저장소 루트에서 실행한다.
+기존 LIMO `/cmd_vel`, `/model/limo_diff/odometry` 및 `/clock` 브리지가 필요하다.
+`empty`는 실제 월드 이름으로 바꾼다.
 
-| 시나리오 | 장애물 움직임 |
-| --- | --- |
-| A | 원기둥 1개가 경로를 횡단 |
-| B | 원기둥 2개가 반대 방향으로 이동 |
-| C | 원기둥 1개가 이동 도중 방향을 반전 |
+### B · 정적 다중 장애물
 
-각 터미널에서 ROS 2 환경을 source한 뒤, 저장소 루트에서 실행한다.
-`empty`는 실행 중인 Gazebo의 월드 이름으로 바꿀 수 있다.
-이미 `/clock`을 브리지 중이면 첫 번째 명령을 생략한다.
-Gazebo에서 시뮬레이션을 재생한 상태로 노드를 실행한다.
+반경 0.4 m의 원통 두 개를 (2.0, +0.5), (3.5, −0.5)에 고정한다.
+노드는 이 좌표를 사용하므로 원통 odometry 브리지는 필요 없다.
 
 ```bash
-# 터미널 1 — 시뮬레이션 시간
-ros2 run ros_gz_bridge parameter_bridge '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
-
-# 터미널 2 — 원기둥 스폰 및 장애물 odometry / cmd_vel 브리지
-python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario A
-
-# 터미널 3 — LIMO 제어
+python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario B
 python3 ros2_limo/single_mppi_node.py --ros-args \
-  -p use_sim_time:=true -p obstacle_scenario:=A \
-  -p predict_obstacles:=true -p seed:=42 -p obstacle_speed_scale:=1.0
+  -p use_sim_time:=true -p obstacle_scenario:=B
 ```
 
-비교 실행은 월드를 초기 상태에서 다시 시작한 뒤 같은 시나리오, 시드,
-속도 배율로 실행한다. `predict_obstacles:=false`는 매 제어 주기에 최신
-장애물 위치를 사용하되, 롤아웃 전체에 그 위치를 유지한다.
-`true`는 Gazebo odometry로 관측한 속도로 롤아웃 중 장애물 위치를 예측한다.
-두 모드에서 장애물의 이동 명령은 동일하다. 별도 파라미터 없는 기존
-노드 실행에서는 정적 장애물 시나리오가 사용된다.
+### CORRIDOR · 좁아지는 통로
 
-동적 시나리오는 2D와 같은 초기 좌표, 원기둥 반경, 장애물 속도,
-MPPI 설정을 사용한다. 기본 속도 배율은 `1.0`이고 C는 약 1초에
-반전한다. MPPI의 모델 제어 주기는 0.02초, 예측 구간은 1초,
-목표 허용 오차는 0.20 m, 시뮬레이션 시간 제한은 6초다.
+정적 원통 두 개와 중앙 쪽으로 0.5 m/s로 이동하는 원통 두 개를 배치한다.
+정지 경계와 롤아웃의 제한된 위치 예측을 2D 통로 코드와 공유한다.
+지원 폭은 0.30, 0.20, 0.15, 0.10 m이며 두 명령에 같은 폭을 지정한다.
+원통이 서로 겹치는 2D 배치를 재현하기 위해 통로 원통은 시각 모델로
+스폰하며 로봇 중심과 원통 반경으로 충돌을 판정한다.
 
-`/mppi/clearance_m`은 2D 실험과 동일하게 LIMO 중심에서 가장 가까운
-장애물 표면까지의 부호 있는 거리다. Gazebo의 실제 차체 접촉은 이
-거리와 별개다. Gazebo에서는 로봇의 물리 응답, odometry 및 명령
-전달 시점에 따라 결과가 달라진다. 20 ms 시뮬레이션 제어 주기를
-따라가는지는 `/mppi/compute_time_ms`와 제어 명령 간격으로 확인한다.
+```bash
+# 터미널 1 — 스폰 후 두 이동 원통의 브리지 유지
+python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario CORRIDOR --gap 0.2
+
+# 터미널 2
+python3 ros2_limo/single_mppi_node.py --ros-args \
+  -p use_sim_time:=true -p obstacle_scenario:=CORRIDOR -p corridor_gap:=0.2
+```
+
+두 시나리오의 MPPI는 2D 설정을 사용한다. `/mppi/clearance_m`은
+로봇 중심에서 가장 가까운 원통 표면까지의 부호 있는 거리다.
+Gazebo의 제어 및 odometry 타이밍에 따라 2D 결과와 차이가 날 수 있다.
+별도 장애물 옵션 없이 실행하면 기존 단일 정적 장애물 모드를 사용한다.
+
+Reset 이후에는 기존 노드를 종료하고 LIMO와 원통이 올바른 초기 위치에
+있는지 확인한다. 원통을 새로 스폰하기 전에 이전 모델을 제거한다.
+통로 스폰 스크립트를 다시 실행할 때는 이전 장애물 브리지도 종료한다.
+시작 조건이 충족되지 않으면 노드가 기다리는 토픽을 로그에 표시한다.
