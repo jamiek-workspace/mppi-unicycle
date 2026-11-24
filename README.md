@@ -89,7 +89,7 @@ python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario A
 # 터미널 3 — LIMO 제어
 python3 ros2_limo/single_mppi_node.py --ros-args \
   -p use_sim_time:=true -p obstacle_scenario:=A \
-  -p predict_obstacles:=true -p seed:=42 -p obstacle_speed_scale:=0.15
+  -p predict_obstacles:=true -p seed:=42 -p obstacle_speed_scale:=1.0
 ```
 
 비교 실행은 월드를 초기 상태에서 다시 시작한 뒤 같은 시나리오, 시드,
@@ -99,15 +99,13 @@ python3 ros2_limo/single_mppi_node.py --ros-args \
 두 모드에서 장애물의 이동 명령은 동일하다. 별도 파라미터 없는 기존
 노드 실행에서는 정적 장애물 시나리오가 사용된다.
 
-원기둥 중심과 반경은 2D와 동일하다. 기본 속도 배율 `0.15`는 LIMO
-속도 제한(0.2 m/s)에 맞춰 Gazebo에서 횡단을 관찰하기 위한 값이다.
-C의 방향 반전 시각도 같은 배율로 늘어나 기본 약 6.67 시뮬레이션 초에
-반전한다. `obstacle_speed_scale:=1.0`에서 2D의 속도와 반전 시각을
-사용한다. Gazebo와 2D는 제어 주기와 로봇 속도 제한이 달라서 결과를 비교할
-때 사용한 설정을 함께 기록한다.
+동적 시나리오는 2D와 같은 초기 좌표, 원기둥 반경, 장애물 속도,
+MPPI 설정을 사용한다. 기본 속도 배율은 `1.0`이고 C는 약 1초에
+반전한다. MPPI의 모델 제어 주기는 0.02초, 예측 구간은 1초,
+목표 허용 오차는 0.20 m, 시뮬레이션 시간 제한은 6초다.
 
-`/mppi/clearance_m`은 가장 가까운 장애물의 표면과 LIMO 근사 원형
-footprint(반경 0.17 m) 사이 여유 거리다. 노드는 목표 도달, 추정
-footprint 겹침, 시간 초과 등 종료 사유와 최소 여유 거리, 경과 시간을
-기록한다. 물리 접촉 여부는 Gazebo에서 별도로 확인한다.
-기존 RViz 경로와 `/mppi/compute_time_ms`도 함께 비교할 수 있다.
+`/mppi/clearance_m`은 2D 실험과 동일하게 LIMO 중심에서 가장 가까운
+장애물 표면까지의 부호 있는 거리다. Gazebo의 실제 차체 접촉은 이
+거리와 별개다. Gazebo에서는 로봇의 물리 응답, odometry 및 명령
+전달 시점에 따라 결과가 달라진다. 20 ms 시뮬레이션 제어 주기를
+따라가는지는 `/mppi/compute_time_ms`와 제어 명령 간격으로 확인한다.
