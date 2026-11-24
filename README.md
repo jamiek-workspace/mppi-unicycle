@@ -62,6 +62,30 @@ python compare_multimodal.py
 
 ## Gazebo Harmonic 실험
 
+### 한 터미널에서 실행하고 반복하기
+
+```bash
+bash ros2_limo/run_experiment.sh B
+# 또는 통로 폭 0.20 m
+bash ros2_limo/run_experiment.sh CORRIDOR 0.2
+```
+
+스크립트가 Gazebo 서버와 GUI, LIMO와 원통의 스폰, 브리지, RViz,
+PlotJuggler를 띄운다. 필요한 ROS 메시지를 수신한 뒤 MPPI를 시작한다.
+같은 터미널에서 Enter를 누르면 새 Gazebo 월드에서 같은 실험을
+반복한다. RViz와 PlotJuggler는 열린 상태로 유지된다. `q` 후
+Enter 또는 Ctrl+C로 종료한다.
+
+기본 LIMO 모델 경로는
+`$HOME/limo_pro_ws/sim_harmonic/models/limo_diff/model.sdf`다.
+다른 경로는 `LIMO_MODEL_SDF`로, 저장해 둔 RViz 설정 파일은
+`MPPI_RVIZ_CONFIG`로 지정할 수 있다. 실행 세션은 별도의 Gazebo
+파티션과 로컬 ROS 도메인 42를 사용한다. 다른 ROS 도메인은
+`MPPI_ROS_DOMAIN_ID`로 지정한다. 시작에 실패하면 터미널에 실패한
+단계와 로그 디렉터리가 표시된다.
+
+### 수동 실행
+
 Gazebo에서 LIMO를 월드 원점 (x=0, y=0, yaw=0)에 스폰하고 재생한다.
 각 터미널에서 ROS 2 Jazzy 환경을 source하고 저장소 루트에서 실행한다.
 기존 LIMO `/cmd_vel`, `/model/limo_diff/odometry` 및 `/clock` 브리지가 필요하다.
