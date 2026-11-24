@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import Clock, ClockType
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path as NavPath
 from geometry_msgs.msg import PoseStamped, Point
@@ -22,8 +23,13 @@ sys.path.insert(0, str(ROOT))
 import config as base_cfg
 from core.controller import MPPIController
 from core.dynamics import step_batch
-from core.dynamic_obstacles import EXPERIMENTS, MultiObstacleController
+from core.dynamic_obstacles import (
+    MultiObstacleController, clipped_prediction, gazebo_experiment,
+)
+
 from spawn_dynamic_obstacles import obstacle_topic
+
+CorridorController = clipped_prediction(MultiObstacleController)
 
 
 def quaternion_to_yaw(q):
@@ -120,11 +126,11 @@ class SingleMPPILimo(Node):
         )
 
         scenario = self.declare_parameter("obstacle_scenario", "").value.upper()
-        if scenario and scenario not in EXPERIMENTS:
-            raise ValueError("obstacle_scenario must be A, B, C or empty")
-
-        self.experiment = EXPERIMENTS.get(scenario)
-        self.cfg.obs_dynamic = self.declare_parameter("predict_obstacles", True).value
+        self.corridor = scenario == "CORRIDOR"
+        gap = self.declare_parameter("corridor_gap", 0.2).value
+        self.experiment = gazebo_experiment(scenario, gap) if scenario else None
+        predict = self.declare_parameter("predict_obstacles", True).value
+        self.cfg.obs_dynamic = self.corridor and predict
         self.cfg.seed = self.declare_parameter("seed", base_cfg.seed).value
         self.speed_scale = self.declare_parameter("obstacle_speed_scale", 1.0).value
         if not math.isfinite(self.speed_scale) or self.speed_scale <= 0:
@@ -135,7 +141,7 @@ class SingleMPPILimo(Node):
         self.min_clearance = math.inf
         if self.experiment:
             self.clearance_pub = self.create_publisher(Float32, "/mppi/clearance_m", 10)
-            for index in range(len(self.experiment["obstacles"])):
+            for index in range(2 if self.corridor else 0):
                 self.obstacle_cmds.append(
                     self.create_publisher(Twist, obstacle_topic(index, "cmd_vel"), 10)
                 )
@@ -145,7 +151,8 @@ class SingleMPPILimo(Node):
                 )
             self.get_logger().info(
                 f"Scenario {scenario}, prediction={self.cfg.obs_dynamic}, "
-                f"seed={self.cfg.seed}, obstacle speed scale={self.speed_scale:.3f}"
+                f"seed={self.cfg.seed}"
+                + (f", corridor gap={gap:.2f}m, speed scale={self.speed_scale:.3f}" if self.corridor else "")
             )
         else:
             self.cfg.dt = 0.1
@@ -167,8 +174,9 @@ class SingleMPPILimo(Node):
             self.cfg.dt, self.control_step
         )
 
-        self.get_logger().info(
-            "Single MPPI LIMO node ready. Waiting for odometry."
+        self.last_clock_check = self.get_clock().now().nanoseconds
+        self.startup_timer = self.create_timer(
+            2.0, self.report_startup_status, clock=Clock(clock_type=ClockType.STEADY_TIME)
         )
 
     def obstacle_callback(self, index, msg):
@@ -185,14 +193,35 @@ class SingleMPPILimo(Node):
             [pose.position.x, pose.position.y, radius], [vx, vy], time.monotonic()
         )
 
-    def command_obstacles(self, elapsed):
-        # Stretch the scenario in time by the same factor used to slow it down.
-        step = int(elapsed * self.speed_scale / base_cfg.dt + 1e-9)
-        velocities = self.experiment["velocity"](step) * self.speed_scale
-        for publisher, (vx, vy) in zip(self.obstacle_cmds, velocities):
+    def report_startup_status(self):
+        if self.controller is not None or self.finished:
+            self.startup_timer.cancel()
+            return
+        now = time.monotonic()
+        missing = []
+        clock_now = self.get_clock().now().nanoseconds
+        if self.get_parameter("use_sim_time").value and clock_now <= self.last_clock_check:
+            missing.append("/clock (simulation time is not advancing)")
+        self.last_clock_check = clock_now
+        if self.last_odom_time is None or now - self.last_odom_time > 0.5:
+            missing.append("/model/limo_diff/odometry")
+        for index in range(len(self.obstacle_cmds)):
+            sample = self.obstacle_states.get(index)
+            if sample is None or now - sample[2] > 0.5:
+                missing.append(obstacle_topic(index, "odometry"))
+        if missing:
+            self.get_logger().warning("Waiting for: " + ", ".join(missing))
+
+    def command_obstacles(self):
+        velocities = self.experiment["velocity"](0)
+        for index, publisher in enumerate(self.obstacle_cmds):
+            position = self.obstacle_states[index][0][1]
+            vy = velocities[index, 1] * self.speed_scale
+            lo, hi = self.experiment["y_limits"][index]
+            stop = lo if vy < 0.0 else hi
+            max_speed = abs(vy)
             cmd = Twist()
-            cmd.linear.x = float(vx)
-            cmd.linear.y = float(vy)
+            cmd.linear.y = float(np.clip((stop - position) / self.cfg.dt, -max_speed, max_speed))
             publisher.publish(cmd)
 
     def odom_callback(self, msg):
@@ -469,7 +498,8 @@ class SingleMPPILimo(Node):
 
         # Odometry 수신 중단 감지
         if now - self.last_odom_time > 0.5:
-            self.finish("Odometry timeout. Robot stopped.")
+            if self.controller is not None:
+                self.finish("Odometry timeout. Robot stopped.")
             return
 
         if self.experiment and (
@@ -486,7 +516,10 @@ class SingleMPPILimo(Node):
 
             if self.experiment:
                 self.goal = np.array(base_cfg.goal)
-                self.controller = MultiObstacleController(self.cfg)
+                if self.corridor:
+                    self.controller = CorridorController(self.cfg, self.experiment['y_limits'])
+                else:
+                    self.controller = MultiObstacleController(self.cfg)
             else:
                 # 로봇 초기 자세 기준 전방 1.0m, 왼쪽 0.7m.
                 self.goal = np.array([
@@ -521,10 +554,12 @@ class SingleMPPILimo(Node):
             return
 
         if self.experiment:
-            samples = [self.obstacle_states[index] for index in range(len(self.obstacle_cmds))]
-            self.controller.obstacles = np.array([sample[0] for sample in samples])
-            self.controller.velocities = np.array([sample[1] for sample in samples])
-            obstacles = self.controller.obstacles
+            obstacles = np.array(self.experiment["obstacles"])
+            velocities = np.zeros((len(obstacles), 2))
+            for index in range(len(self.obstacle_cmds)):
+                obstacles[index], velocities[index], _ = self.obstacle_states[index]
+            self.controller.obstacles = obstacles
+            self.controller.velocities = velocities
             clearance = float(np.min(
                 np.linalg.norm(self.state[:2] - obstacles[:, :2], axis=1) - obstacles[:, 2]
             ))
@@ -590,8 +625,8 @@ class SingleMPPILimo(Node):
             )
         )
 
-        if self.experiment:
-            self.command_obstacles(elapsed)
+        if self.corridor:
+            self.command_obstacles()
         self.cmd_pub.publish(cmd)
         self.step_count += 1
 
