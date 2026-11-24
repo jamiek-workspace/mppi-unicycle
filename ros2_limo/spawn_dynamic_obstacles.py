@@ -7,24 +7,17 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.dynamic_obstacles import EXPERIMENTS
+from core.dynamic_obstacles import gazebo_experiment
 
 
 def obstacle_topic(index, suffix):
     return f"/model/mppi_obstacle_{index}/{suffix}"
 
 
-def cylinder_sdf(index, radius):
+def cylinder_sdf(index, radius, moving, physical_collision):
     geometry = f"<geometry><cylinder><radius>{radius}</radius><length>0.6</length></cylinder></geometry>"
-    return f"""<sdf version="1.9">
-      <model name="mppi_obstacle_{index}">
-        <link name="body">
-          <gravity>false</gravity>
-          <collision name="body">{geometry}</collision>
-          <visual name="body">{geometry}
-            <material><ambient>0.85 0.28 0.1 1</ambient></material>
-          </visual>
-        </link>
+    collision = f'<collision name="body">{geometry}</collision>' if physical_collision else ""
+    plugins = """
         <plugin filename="gz-sim-velocity-control-system"
                 name="gz::sim::systems::VelocityControl"/>
         <plugin filename="gz-sim-odometry-publisher-system"
@@ -32,6 +25,19 @@ def cylinder_sdf(index, radius):
           <odom_frame>world</odom_frame>
           <odom_publish_frequency>50</odom_publish_frequency>
         </plugin>
+    """ if moving else ""
+    static = "false" if moving else "true"
+    return f"""<sdf version="1.9">
+      <model name="mppi_obstacle_{index}">
+        <static>{static}</static>
+        <link name="body">
+          <gravity>false</gravity>
+          {collision}
+          <visual name="body">{geometry}
+            <material><ambient>0.85 0.28 0.1 1</ambient></material>
+          </visual>
+        </link>
+        {plugins}
       </model>
     </sdf>"""
 
@@ -39,22 +45,28 @@ def cylinder_sdf(index, radius):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", default="empty")
-    parser.add_argument("--scenario", choices=EXPERIMENTS, default="A")
+    parser.add_argument("--scenario", type=str.upper, choices=("B", "CORRIDOR"), default="B")
+    parser.add_argument("--gap", type=float, default=0.2)
     args = parser.parse_args()
+    corridor = args.scenario == "CORRIDOR"
+    obstacles = gazebo_experiment(args.scenario, args.gap)["obstacles"]
 
     bridge = ["ros2", "run", "ros_gz_bridge", "parameter_bridge"]
-    for index, (x, y, radius) in enumerate(EXPERIMENTS[args.scenario]["obstacles"]):
+    for index, (x, y, radius) in enumerate(obstacles):
+        moving = corridor and index < 2
         subprocess.run(
             ["ros2", "run", "ros_gz_sim", "create", "-world", args.world,
-             "-string", cylinder_sdf(index, radius),
+             "-string", cylinder_sdf(index, radius, moving, physical_collision=not corridor),
              "-x", str(x), "-y", str(y), "-z", "0.3"],
             check=True,
         )
-        bridge.extend([
-            obstacle_topic(index, "cmd_vel") + "@geometry_msgs/msg/Twist]gz.msgs.Twist",
-            obstacle_topic(index, "odometry") + "@nav_msgs/msg/Odometry[gz.msgs.Odometry",
-        ])
-    os.execvp(bridge[0], bridge)
+        if moving:
+            bridge.extend([
+                obstacle_topic(index, "cmd_vel") + "@geometry_msgs/msg/Twist]gz.msgs.Twist",
+                obstacle_topic(index, "odometry") + "@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+            ])
+    if corridor:
+        os.execvp(bridge[0], bridge)
 
 
 if __name__ == "__main__":
