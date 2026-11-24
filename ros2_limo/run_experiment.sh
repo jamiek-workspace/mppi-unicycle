@@ -75,18 +75,20 @@ prepare_trial() {
   start_trial_process "$trial_logs/gazebo-server.log" gz sim -s -r -v 4 empty.sdf
   local server_pid=${trial_pids[0]}
   local ready=false
-  for _ in {1..20}; do
+  local services_log="$trial_logs/gazebo-services.log"
+  for _ in {1..12}; do
     if ! kill -0 "$server_pid" 2>/dev/null; then break; fi
-    local services
-    services=$(timeout 2s gz service -l) || services=""
-    if [[ $'\n'$services$'\n' == *$'\n/world/empty/create\n'* ]]; then
+    timeout 4s gz service -l > "$services_log" 2>&1 || true
+    if grep -Eq '^/world/empty/(create|create_multiple)(/blocking)?[[:space:]]*$' "$services_log"; then
       ready=true
       break
     fi
     sleep 0.25
   done
   if [[ $ready == false ]]; then
-    echo "Gazebo world empty did not become ready. See $trial_logs/gazebo-server.log." >&2
+    echo "Gazebo world empty did not become ready." >&2
+    echo "Server log: $trial_logs/gazebo-server.log" >&2
+    echo "Service discovery log: $services_log" >&2
     return 1
   fi
 
