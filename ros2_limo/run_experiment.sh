@@ -136,6 +136,9 @@ while true; do
   mkdir "$trial_logs"
   echo "Starting $scenario (trial $trial)"
   if prepare_trial; then
+    if ! read -r -p "Gazebo view ready? Enter: start MPPI | q then Enter: quit > " start || [[ $start == q ]]; then
+      break
+    fi
     setsid python3 -u ros2_limo/single_mppi_node.py --ros-args \
       -p use_sim_time:=true -p obstacle_scenario:="$scenario" -p corridor_gap:="$gap" \
       > >(tee "$trial_logs/mppi.log") 2>&1 &
