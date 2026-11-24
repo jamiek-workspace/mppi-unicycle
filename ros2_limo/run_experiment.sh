@@ -101,7 +101,6 @@ prepare_trial() {
     '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist' \
     '/model/limo_diff/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry' \
     '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
-  start_trial_process "$trial_logs/gazebo-gui.log" gz sim -g -v 4
 
   local -a spawn=(python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario "$scenario")
   if [[ $scenario == CORRIDOR ]]; then
@@ -134,6 +133,8 @@ prepare_trial() {
     return 1
   fi
 
+  echo "Gazebo confirmed models: ${expected_models[*]}"
+  start_trial_process "$trial_logs/gazebo-gui.log" gz sim -g -v 4
   wait_for_topic /clock rosgraph_msgs/msg/Clock || return 1
   wait_for_topic /model/limo_diff/odometry nav_msgs/msg/Odometry || return 1
   if [[ $scenario == CORRIDOR ]]; then
