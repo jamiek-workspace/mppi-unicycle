@@ -119,12 +119,6 @@ class SingleMPPILimo(Node):
             }
         )
 
-        self.cfg.dt = 0.1
-        self.cfg.v_max = 0.2
-        self.cfg.omega_max = 0.5
-        self.cfg.noise_std = [0.08, 0.3]
-        self.cfg.goal_tolerance = 0.15
-
         scenario = self.declare_parameter("obstacle_scenario", "").value.upper()
         if scenario and scenario not in EXPERIMENTS:
             raise ValueError("obstacle_scenario must be A, B, C or empty")
@@ -132,7 +126,7 @@ class SingleMPPILimo(Node):
         self.experiment = EXPERIMENTS.get(scenario)
         self.cfg.obs_dynamic = self.declare_parameter("predict_obstacles", True).value
         self.cfg.seed = self.declare_parameter("seed", base_cfg.seed).value
-        self.speed_scale = self.declare_parameter("obstacle_speed_scale", 0.15).value
+        self.speed_scale = self.declare_parameter("obstacle_speed_scale", 1.0).value
         if not math.isfinite(self.speed_scale) or self.speed_scale <= 0:
             raise ValueError("obstacle_speed_scale must be finite and positive")
 
@@ -154,6 +148,11 @@ class SingleMPPILimo(Node):
                 f"seed={self.cfg.seed}, obstacle speed scale={self.speed_scale:.3f}"
             )
         else:
+            self.cfg.dt = 0.1
+            self.cfg.v_max = 0.2
+            self.cfg.omega_max = 0.5
+            self.cfg.noise_std = [0.08, 0.3]
+            self.cfg.goal_tolerance = 0.15
             self.cfg.obs_dynamic = False
 
         self.state = None
@@ -181,7 +180,7 @@ class SingleMPPILimo(Node):
         # world (0, 0, yaw=0) so world XY and the LIMO odom XY coincide.
         vx = cos_yaw * velocity.x - sin_yaw * velocity.y
         vy = sin_yaw * velocity.x + cos_yaw * velocity.y
-        radius = self.experiment["obstacles"][index][2] + 0.17
+        radius = self.experiment["obstacles"][index][2]
         self.obstacle_states[index] = (
             [pose.position.x, pose.position.y, radius], [vx, vy], time.monotonic()
         )
@@ -502,9 +501,9 @@ class SingleMPPILimo(Node):
             self.cfg.goal = self.goal.tolist()
             self.publish_goal_markers()
 
-            # 초기 제어 시퀀스 제한
-            self.controller.controls[:, 0] = 0.1
-            self.controller.controls[:, 1] = 0.0
+            if not self.experiment:
+                self.controller.controls[:, 0] = 0.1
+                self.controller.controls[:, 1] = 0.0
 
             self.started_at = self.run_time()
 
@@ -513,7 +512,8 @@ class SingleMPPILimo(Node):
                 f"Goal: ({self.goal[0]:.2f}, "
                 f"{self.goal[1]:.2f})"
             )
-            return
+            if not self.experiment:
+                return
 
         elapsed = self.run_time() - self.started_at
         if elapsed < 0.0:
@@ -531,12 +531,8 @@ class SingleMPPILimo(Node):
             self.min_clearance = min(self.min_clearance, clearance)
             self.clearance_pub.publish(Float32(data=clearance))
             if clearance <= 0.0:
-                self.finish("Estimated footprint overlap.")
+                self.finish("Robot center entered an obstacle radius.")
                 return
-
-        if elapsed > (60.0 if self.experiment else 30.0):
-            self.finish("Maximum test duration reached.")
-            return
 
         distance = np.linalg.norm(
             self.state[:2] - self.goal
@@ -548,8 +544,10 @@ class SingleMPPILimo(Node):
             )
             return
 
-        if self.experiment:
-            self.command_obstacles(elapsed)
+        time_limit = self.cfg.max_steps * self.cfg.dt if self.experiment else 30.0
+        if elapsed >= time_limit:
+            self.finish("Maximum test duration reached.")
+            return
 
         start_compute = time.monotonic()
 
@@ -592,6 +590,8 @@ class SingleMPPILimo(Node):
             )
         )
 
+        if self.experiment:
+            self.command_obstacles(elapsed)
         self.cmd_pub.publish(cmd)
         self.step_count += 1
 
