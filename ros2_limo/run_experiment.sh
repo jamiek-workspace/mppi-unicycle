@@ -163,8 +163,12 @@ while true; do
     if ! read -r -p "Gazebo view ready? Enter: start MPPI | q then Enter: quit > " start || [[ $start == q ]]; then
       break
     fi
+    speed_args=()
+    if [[ $scenario == B ]]; then
+      speed_args=(-p b_v_max:="${MPPI_B_V_MAX:-0.30}" -p b_omega_max:="${MPPI_B_OMEGA_MAX:-0.50}")
+    fi
     setsid python3 -u ros2_limo/single_mppi_node.py --ros-args \
-      -p use_sim_time:=true -p obstacle_scenario:="$scenario" -p corridor_gap:="$gap" \
+      -p use_sim_time:=true -p obstacle_scenario:="$scenario" -p corridor_gap:="$gap" "${speed_args[@]}" \
       > >(tee "$trial_logs/mppi.log") 2>&1 &
     trial_pids+=("$!")
   fi
