@@ -169,6 +169,9 @@ if [[ -n ${MPPI_RVIZ_CONFIG:-} ]]; then
   rviz_args=(-d "$MPPI_RVIZ_CONFIG")
 fi
 if [[ $scenario == CORRIDOR_PHYSICAL ]]; then
+  if [[ -z ${MPPI_RVIZ_CONFIG:-} ]]; then
+    rviz_args=(-d "$PWD/rviz/single_mppi.rviz")
+  fi
   rviz_args+=(-f world)
 fi
 setsid rviz2 "${rviz_args[@]}" --ros-args -p use_sim_time:=true > "$logs/rviz.log" 2>&1 &
