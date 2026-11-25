@@ -148,6 +148,13 @@ class SingleMPPILimo(Node):
             self.cfg.goal_tolerance = 0.15
             self.cfg.obs_dynamic = False
 
+        if self.static_multi:
+            self.cfg.v_max = self.declare_parameter("b_v_max", 0.30).value
+            self.cfg.omega_max = self.declare_parameter("b_omega_max", 0.50).value
+            for limit in (self.cfg.v_max, self.cfg.omega_max):
+                if not math.isfinite(limit) or limit <= 0.0:
+                    raise ValueError("B speed limits must be finite and positive")
+
         self.obstacle_states = {}
         self.obstacle_cmds = []
         self.min_clearance = math.inf
@@ -163,7 +170,8 @@ class SingleMPPILimo(Node):
                 )
             self.get_logger().info(
                 f"Scenario {scenario}, prediction={self.cfg.obs_dynamic}, "
-                f"seed={self.cfg.seed}"
+                f"seed={self.cfg.seed}, v_max={self.cfg.v_max:.2f}m/s, "
+                f"omega_max={self.cfg.omega_max:.2f}rad/s"
                 + (f", footprint radius={self.footprint_radius:.2f}m" if self.static_multi else "")
                 + (f", corridor gap={gap:.2f}m, speed scale={self.speed_scale:.3f}" if self.corridor else "")
             )
