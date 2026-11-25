@@ -117,7 +117,8 @@ prepare_trial() {
   local model_log="$trial_logs/gazebo-models.log"
   local -a missing_models
   local name
-  for _ in {1..4}; do
+  local model_deadline=$((SECONDS + 25))
+  while true; do
     missing_models=()
     timeout 4s gz model --list > "$model_log" 2>&1 || true
     for name in "${expected_models[@]}"; do
@@ -125,7 +126,7 @@ prepare_trial() {
         missing_models+=("$name")
       fi
     done
-    if (( ${#missing_models[@]} == 0 )); then break; fi
+    if (( ${#missing_models[@]} == 0 || SECONDS >= model_deadline )); then break; fi
     sleep 0.25
   done
   if (( ${#missing_models[@]} > 0 )); then
