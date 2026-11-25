@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 
@@ -42,6 +43,25 @@ def main():
              "-z", "0.15", "-Y", "0"],
             check=True,
         )
+
+        # An accepted create request can still be queued in Gazebo. Keep the
+        # SDF available until the model is present in the simulation.
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            try:
+                models = subprocess.run(
+                    ["gz", "model", "--list"], capture_output=True,
+                    text=True, timeout=2.0,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            if models.returncode == 0 and any(
+                line.strip() == "- limo_diff" for line in models.stdout.splitlines()
+            ):
+                print("Gazebo registered limo_diff.", flush=True)
+                return
+            time.sleep(0.2)
+        raise SystemExit("Gazebo accepted the LIMO spawn request but never listed limo_diff.")
 
 
 if __name__ == "__main__":
