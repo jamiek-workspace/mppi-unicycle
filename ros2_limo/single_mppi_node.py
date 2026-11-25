@@ -34,6 +34,26 @@ from spawn_dynamic_obstacles import obstacle_topic
 CorridorController = clipped_prediction(MultiObstacleController)
 
 
+def wrap_angle(angle):
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
+class GuidedCorridorController(CorridorController):
+    lane_y = None
+
+    def compute_costs(self, trajectories, effective_noise):
+        costs = super().compute_costs(trajectories, effective_noise)
+        x, y, yaw = np.moveaxis(trajectories[:, 1:, :], -1, 0)
+        if self.lane_y is None:
+            dx, dy = self.cfg.goal[0] - x, self.cfg.goal[1] - y
+            heading_error = wrap_angle(np.arctan2(dy, dx) - yaw)
+            weight = np.minimum(np.hypot(dx, dy) / 0.30, 1.0)
+            tracking = 4.0 * weight * heading_error ** 2
+        else:
+            tracking = 4.0 * wrap_angle(yaw) ** 2 + 8.0 * (y - self.lane_y) ** 2
+        return costs + self.cfg.dt * np.sum(tracking, axis=1)
+
+
 def quaternion_to_yaw(q):
     return math.atan2(
         2.0 * (q.w * q.z + q.x * q.y),
@@ -557,7 +577,8 @@ class SingleMPPILimo(Node):
             if self.experiment:
                 self.goal = np.array(base_cfg.goal)
                 if self.corridor:
-                    self.controller = CorridorController(self.cfg, self.experiment['y_limits'])
+                    controller_type = GuidedCorridorController if self.physical_corridor else CorridorController
+                    self.controller = controller_type(self.cfg, self.experiment["y_limits"])
                 else:
                     self.controller = MultiObstacleController(self.cfg)
             else:
@@ -636,6 +657,19 @@ class SingleMPPILimo(Node):
                 self.get_logger().info(f"Corridor waypoint reached: {reached.tolist()}")
             target = self.corridor_waypoints[0] if self.corridor_waypoints else self.goal
             self.cfg.goal = target.tolist()
+            self.controller.lane_y = float(target[1]) if len(self.corridor_waypoints) == 1 else None
+            dx, dy = target - self.state[:2]
+            heading = math.atan2(dy, dx) if self.controller.lane_y is None else 0.0
+            heading_error = float(wrap_angle(heading - self.state[2]))
+            if abs(heading_error) > math.pi / 4:
+                # Give the sampler a turn-in-place nominal sequence.
+                turn_steps = min(self.cfg.H, math.ceil(
+                    abs(heading_error) / (self.cfg.omega_max * self.cfg.dt)
+                ))
+                self.controller.controls[:turn_steps, 0] = 0.0
+                self.controller.controls[:turn_steps, 1] = math.copysign(
+                    self.cfg.omega_max, heading_error
+                )
 
         start_compute = time.monotonic()
 
@@ -693,6 +727,10 @@ class SingleMPPILimo(Node):
                 f"v={cmd.linear.x:.3f} | "
                 f"omega={cmd.angular.z:.3f} | "
                 f"compute={compute_time * 1000:.1f} ms"
+                + (f" | active_goal=({target[0]:.2f}, {target[1]:.2f})"
+                   f" | active_distance={math.hypot(dx, dy):.3f}m"
+                   f" | heading_error={math.degrees(heading_error):+.1f}deg"
+                   if self.physical_corridor else "")
             )
 
 
