@@ -168,6 +168,14 @@ while true; do
     if ! read -r -p "Gazebo view ready? Enter: start MPPI | q then Enter: quit > " start || [[ $start == q ]]; then
       break
     fi
+    if [[ ${MPPI_TRACE_POSE:-0} == 1 ]]; then
+      start_trial_process "$trial_logs/gazebo-world-pose.log" \
+        stdbuf -oL gz topic -e -t /world/empty/dynamic_pose/info
+      start_trial_process "$trial_logs/limo-odometry.log" \
+        env PYTHONUNBUFFERED=1 ros2 topic echo /model/limo_diff/odometry nav_msgs/msg/Odometry \
+        --qos-reliability best_effort
+      echo "Pose traces: $trial_logs/gazebo-world-pose.log and $trial_logs/limo-odometry.log"
+    fi
     speed_args=()
     if [[ $scenario == B ]]; then
       speed_args=(-p b_v_max:="${MPPI_B_V_MAX:-0.30}" -p b_omega_max:="${MPPI_B_OMEGA_MAX:-0.50}")
