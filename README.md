@@ -120,7 +120,9 @@ python3 ros2_limo/single_mppi_node.py --ros-args \
 ```
 
 B의 Gazebo 제어는 기존 단일 정적 장애물 데모의 제어 주기(0.10초),
-전진 속도 상한(0.20 m/s), 각속도 상한(0.50 rad/s)을 사용한다.
+전진 속도 상한(0.30 m/s), 각속도 상한(0.50 rad/s)을 사용한다.
+기준 속도 비교는 `MPPI_B_V_MAX=0.20 bash ros2_limo/run_experiment.sh B`,
+각속도 상향 비교는 `MPPI_B_OMEGA_MAX=0.75 bash ros2_limo/run_experiment.sh B`로 실행한다.
 B의 제한 시간은 60 시뮬레이션 초다. 장애물 비용과 `/mppi/clearance_m`은
 LIMO를 반경 0.17 m 원으로 근사해 원통 반경을 그만큼 확장한다.
 CORRIDOR는 2D 제어 설정을 사용하며 여유 거리는 로봇 중심에서 계산한다.
