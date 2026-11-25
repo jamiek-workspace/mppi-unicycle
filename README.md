@@ -119,8 +119,11 @@ python3 ros2_limo/single_mppi_node.py --ros-args \
   -p use_sim_time:=true -p obstacle_scenario:=CORRIDOR -p corridor_gap:=0.2
 ```
 
-두 시나리오의 MPPI는 2D 설정을 사용한다. `/mppi/clearance_m`은
-로봇 중심에서 가장 가까운 원통 표면까지의 부호 있는 거리다.
+B의 Gazebo 제어는 기존 단일 정적 장애물 데모의 제어 주기(0.10초),
+전진 속도 상한(0.20 m/s), 각속도 상한(0.50 rad/s)을 사용한다.
+B의 제한 시간은 60 시뮬레이션 초다. 장애물 비용과 `/mppi/clearance_m`은
+LIMO를 반경 0.17 m 원으로 근사해 원통 반경을 그만큼 확장한다.
+CORRIDOR는 2D 제어 설정을 사용하며 여유 거리는 로봇 중심에서 계산한다.
 Gazebo의 제어 및 odometry 타이밍에 따라 2D 결과와 차이가 날 수 있다.
 별도 장애물 옵션 없이 실행하면 기존 단일 정적 장애물 모드를 사용한다.
 
