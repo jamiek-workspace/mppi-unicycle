@@ -1,5 +1,6 @@
 """Compare Gazebo and wheel odometry at the same simulation timestamps."""
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -7,9 +8,11 @@ import yaml
 
 
 def read_xy(path):
+    print(f"Reading {path.name} ({path.stat().st_size / 2**20:.1f} MiB)...", file=sys.stderr, flush=True)
     rows = {}
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
     with path.open() as stream:
-        for msg in yaml.safe_load_all(stream):
+        for msg in yaml.load_all(stream, Loader=loader):
             if not msg or not {"header", "pose"} <= msg.keys():
                 continue
             stamp = msg["header"]["stamp"]
