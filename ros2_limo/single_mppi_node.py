@@ -157,6 +157,7 @@ class SingleMPPILimo(Node):
 
         self.obstacle_states = {}
         self.obstacle_cmds = []
+        self.stopped_obstacles = set()
         self.min_clearance = math.inf
         if self.experiment:
             self.clearance_pub = self.create_publisher(Float32, "/mppi/clearance_m", 10)
@@ -233,9 +234,16 @@ class SingleMPPILimo(Node):
             vy = velocities[index, 1] * self.speed_scale
             lo, hi = self.experiment["y_limits"][index]
             stop = lo if vy < 0.0 else hi
-            max_speed = abs(vy)
+            direction = math.copysign(1.0, vy)
+            remaining = direction * (stop - position)
+            if index not in self.stopped_obstacles and remaining <= 0.005:
+                self.stopped_obstacles.add(index)
+                self.get_logger().info(
+                    f"Obstacle {index} stop latched: y={position:+.3f}m, target={stop:+.3f}m"
+                )
             cmd = Twist()
-            cmd.linear.y = float(np.clip((stop - position) / self.cfg.dt, -max_speed, max_speed))
+            if index not in self.stopped_obstacles:
+                cmd.linear.y = direction * min(abs(vy), remaining / self.cfg.dt)
             publisher.publish(cmd)
 
     def odom_callback(self, msg):
