@@ -133,3 +133,24 @@ Reset 이후에는 기존 노드를 종료하고 LIMO와 원통이 올바른 초
 있는지 확인한다. 원통을 새로 스폰하기 전에 이전 모델을 제거한다.
 통로 스폰 스크립트를 다시 실행할 때는 이전 장애물 브리지도 종료한다.
 시작 조건이 충족되지 않으면 노드가 기다리는 토픽을 로그에 표시한다.
+
+### Gazebo 물리 통로와 자세 비교
+
+```bash
+MPPI_TRACE_POSE=1 bash ros2_limo/run_experiment.sh CORRIDOR_PHYSICAL 0.50
+python3 ros2_limo/compare_pose_logs.py /tmp/mppi-limo.XXXXXX/trial-1
+```
+
+`CORRIDOR_PHYSICAL`은 Gazebo 월드 자세를 MPPI 상태와 RViz 경로에
+사용하며, 네 원통에 충돌 형상을 적용한다. 이동 원통은 서로 닿기
+전에 멈추고, 외곽 원통은 초기 겹침을 피하도록 배치한다. 목표
+옆 통로 기본 폭은 0.50 m, 제어 주기는 0.10초, 속도 상한은
+0.40 m/s, 각속도 상한은 0.50 rad/s다. 원통 비용에는 LIMO 근사
+반경 0.17 m를 더한다. RViz의 Fixed Frame은 `world`다.
+
+`MPPI_TRACE_POSE=1`은 별도 시뮬레이터 odometry 출력을 추가해
+`gazebo-odometry.log`와 `limo-odometry.log`를 기록한다. 기존
+`CORRIDOR 0.30`에 이 옵션을 붙이면 기존 위치 입력으로 주행하면서
+두 기록을 비교할 수 있다. 위 비교 명령에 런처가 출력한 실제
+trial 경로를 넣으면 같은 시각의 XY 차이와 Gazebo x=2.5 m 통과
+지점이 출력된다.

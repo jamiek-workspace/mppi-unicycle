@@ -5,9 +5,13 @@ set -eo pipefail
 case "${1:-B}" in
   B|b) scenario=B ;;
   CORRIDOR|corridor) scenario=CORRIDOR ;;
-  *) echo "Usage: bash ros2_limo/run_experiment.sh [B|CORRIDOR] [gap]" >&2; exit 2 ;;
+  CORRIDOR_PHYSICAL|corridor_physical) scenario=CORRIDOR_PHYSICAL ;;
+  *) echo "Usage: bash ros2_limo/run_experiment.sh [B|CORRIDOR|CORRIDOR_PHYSICAL] [gap]" >&2; exit 2 ;;
 esac
-gap=${2:-0.2}
+default_gap=0.2
+if [[ $scenario == CORRIDOR_PHYSICAL ]]; then default_gap=0.50; fi
+gap=${2:-$default_gap}
+trace_pose=${MPPI_TRACE_POSE:-0}
 if [[ $scenario == CORRIDOR && ! $gap =~ ^0\.(30?|20?|15|10?)$ ]]; then
   echo "Corridor gap must be 0.30, 0.20, 0.15 or 0.10." >&2
   exit 2
@@ -15,6 +19,9 @@ fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 source /opt/ros/jazzy/setup.bash
+if [[ $scenario == CORRIDOR_PHYSICAL ]]; then
+  python3 -c 'import sys; from core.dynamic_obstacles import gazebo_experiment; gazebo_experiment("CORRIDOR_PHYSICAL", float(sys.argv[1]))' "$gap"
+fi
 model=${LIMO_MODEL_SDF:-"$HOME/limo_pro_ws/sim_harmonic/models/limo_diff/model.sdf"}
 if [[ ! -r $model ]]; then
   echo "LIMO SDF not found: $model. Set LIMO_MODEL_SDF to the model.sdf path." >&2
@@ -96,18 +103,24 @@ prepare_trial() {
     return 1
   fi
 
-  if ! timeout 15s ros2 run ros_gz_sim create -world empty -name limo_diff \
-      -file "$model" -x 0 -y 0 -z 0.15 -Y 0 > "$trial_logs/limo-spawn.log" 2>&1; then
+  local -a limo_spawn=(ros2 run ros_gz_sim create -world empty -name limo_diff
+    -file "$model" -x 0 -y 0 -z 0.15 -Y 0)
+  local -a pose_bridge=()
+  if [[ $scenario == CORRIDOR_PHYSICAL || $trace_pose == 1 ]]; then
+    limo_spawn=(python3 ros2_limo/spawn_limo_world_pose.py "$model")
+    pose_bridge=('/mppi/gazebo_odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry')
+  fi
+  if ! timeout 15s "${limo_spawn[@]}" > "$trial_logs/limo-spawn.log" 2>&1; then
     echo "LIMO spawn failed. See $trial_logs/limo-spawn.log." >&2
     return 1
   fi
   start_trial_process "$trial_logs/bridge.log" ros2 run ros_gz_bridge parameter_bridge \
     '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist' \
     '/model/limo_diff/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry' \
-    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
+    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock' "${pose_bridge[@]}"
 
   local -a spawn=(python3 ros2_limo/spawn_dynamic_obstacles.py --world empty --scenario "$scenario")
-  if [[ $scenario == CORRIDOR ]]; then
+  if [[ $scenario != B ]]; then
     start_trial_process "$trial_logs/obstacles.log" "${spawn[@]}" --gap "$gap"
   elif ! timeout 25s "${spawn[@]}" > "$trial_logs/obstacles.log" 2>&1; then
     echo "Obstacle spawn failed. See $trial_logs/obstacles.log." >&2
@@ -115,7 +128,7 @@ prepare_trial() {
   fi
 
   local -a expected_models=(limo_diff mppi_obstacle_0 mppi_obstacle_1)
-  if [[ $scenario == CORRIDOR ]]; then
+  if [[ $scenario != B ]]; then
     expected_models+=(mppi_obstacle_2 mppi_obstacle_3)
   fi
   local model_log="$trial_logs/gazebo-models.log"
@@ -142,7 +155,10 @@ prepare_trial() {
   start_trial_process "$trial_logs/gazebo-gui.log" gz sim -g -v 4
   wait_for_topic /clock rosgraph_msgs/msg/Clock || return 1
   wait_for_topic /model/limo_diff/odometry nav_msgs/msg/Odometry || return 1
-  if [[ $scenario == CORRIDOR ]]; then
+  if [[ $scenario == CORRIDOR_PHYSICAL || $trace_pose == 1 ]]; then
+    wait_for_topic /mppi/gazebo_odometry nav_msgs/msg/Odometry || return 1
+  fi
+  if [[ $scenario != B ]]; then
     wait_for_topic /model/mppi_obstacle_0/odometry nav_msgs/msg/Odometry || return 1
     wait_for_topic /model/mppi_obstacle_1/odometry nav_msgs/msg/Odometry || return 1
   fi
@@ -151,6 +167,9 @@ prepare_trial() {
 rviz_args=()
 if [[ -n ${MPPI_RVIZ_CONFIG:-} ]]; then
   rviz_args=(-d "$MPPI_RVIZ_CONFIG")
+fi
+if [[ $scenario == CORRIDOR_PHYSICAL ]]; then
+  rviz_args+=(-f world)
 fi
 setsid rviz2 "${rviz_args[@]}" --ros-args -p use_sim_time:=true > "$logs/rviz.log" 2>&1 &
 session_pids+=("$!")
@@ -168,17 +187,20 @@ while true; do
     if ! read -r -p "Gazebo view ready? Enter: start MPPI | q then Enter: quit > " start || [[ $start == q ]]; then
       break
     fi
-    if [[ ${MPPI_TRACE_POSE:-0} == 1 ]]; then
-      start_trial_process "$trial_logs/gazebo-world-pose.log" \
-        stdbuf -oL gz topic -e -t /world/empty/dynamic_pose/info
+    if [[ $trace_pose == 1 ]]; then
+      start_trial_process "$trial_logs/gazebo-odometry.log" \
+        env PYTHONUNBUFFERED=1 ros2 topic echo /mppi/gazebo_odometry nav_msgs/msg/Odometry \
+        --qos-reliability best_effort
       start_trial_process "$trial_logs/limo-odometry.log" \
         env PYTHONUNBUFFERED=1 ros2 topic echo /model/limo_diff/odometry nav_msgs/msg/Odometry \
         --qos-reliability best_effort
-      echo "Pose traces: $trial_logs/gazebo-world-pose.log and $trial_logs/limo-odometry.log"
+      echo "Pose traces: $trial_logs/gazebo-odometry.log and $trial_logs/limo-odometry.log"
     fi
     speed_args=()
     if [[ $scenario == B ]]; then
       speed_args=(-p b_v_max:="${MPPI_B_V_MAX:-0.30}" -p b_omega_max:="${MPPI_B_OMEGA_MAX:-0.50}")
+    elif [[ $scenario == CORRIDOR_PHYSICAL ]]; then
+      speed_args=(-p pose_topic:=/mppi/gazebo_odometry -p path_frame:=world)
     fi
     setsid python3 -u ros2_limo/single_mppi_node.py --ros-args \
       -p use_sim_time:=true -p obstacle_scenario:="$scenario" -p corridor_gap:="$gap" "${speed_args[@]}" \

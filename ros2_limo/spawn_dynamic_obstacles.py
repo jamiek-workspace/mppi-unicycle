@@ -45,10 +45,10 @@ def cylinder_sdf(index, radius, moving, physical_collision):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", default="empty")
-    parser.add_argument("--scenario", type=str.upper, choices=("B", "CORRIDOR"), default="B")
+    parser.add_argument("--scenario", type=str.upper, choices=("B", "CORRIDOR", "CORRIDOR_PHYSICAL"), default="B")
     parser.add_argument("--gap", type=float, default=0.2)
     args = parser.parse_args()
-    corridor = args.scenario == "CORRIDOR"
+    corridor = args.scenario != "B"
     obstacles = gazebo_experiment(args.scenario, args.gap)["obstacles"]
 
     bridge = ["ros2", "run", "ros_gz_bridge", "parameter_bridge"]
@@ -57,7 +57,7 @@ def main():
         subprocess.run(
             ["ros2", "run", "ros_gz_sim", "create", "-world", args.world,
              "-name", f"mppi_obstacle_{index}",
-             "-string", cylinder_sdf(index, radius, moving, physical_collision=not corridor),
+             "-string", cylinder_sdf(index, radius, moving, physical_collision=args.scenario != "CORRIDOR"),
              "-x", str(x), "-y", str(y), "-z", "0.3"],
             check=True,
         )

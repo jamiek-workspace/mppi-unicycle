@@ -121,4 +121,19 @@ def gazebo_experiment(scenario, gap):
         if gap not in CORRIDOR_GAPS:
             raise ValueError(f"corridor gap must be one of {CORRIDOR_GAPS}")
         return make_corridor(gap)
-    raise ValueError("scenario must be B or CORRIDOR")
+    if scenario == "CORRIDOR_PHYSICAL":
+        if not np.isfinite(gap) or gap < 0.40:
+            raise ValueError("physical corridor gap must be at least 0.40 m")
+        # Leave clearance between both moving cylinders at their stop positions
+        # and between each moving cylinder and its outer wall at spawn.
+        stop = OBS_R + 0.05
+        start = 0.80
+        wall = stop + OBS_R + WALL_R + gap
+        return {
+            "obstacles": [[X_CENTER, start, OBS_R], [X_CENTER, -start, OBS_R],
+                          [X_CENTER, wall, WALL_R], [X_CENTER, -wall, WALL_R]],
+            "velocity": lambda _: np.array([[0.0, -CORRIDOR_SPEED], [0.0, CORRIDOR_SPEED],
+                                            [0.0, 0.0], [0.0, 0.0]]),
+            "y_limits": [(stop, start), (-start, -stop), (wall, wall), (-wall, -wall)],
+        }
+    raise ValueError("scenario must be B, CORRIDOR or CORRIDOR_PHYSICAL")

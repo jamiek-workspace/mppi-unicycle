@@ -81,9 +81,11 @@ class SingleMPPILimo(Node):
             10
         )
 
+        self.pose_topic = self.declare_parameter("pose_topic", "/model/limo_diff/odometry").value
+        self.path_frame = self.declare_parameter("path_frame", "odom").value
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/model/limo_diff/odometry",
+            self.pose_topic,
             self.odom_callback,
             10
         )
@@ -114,7 +116,7 @@ class SingleMPPILimo(Node):
         )
 
         self.actual_path = NavPath()
-        self.actual_path.header.frame_id = "odom"
+        self.actual_path.header.frame_id = self.path_frame
 
         # 기존 설정을 복사하여 테스트용으로 변경
         self.cfg = SimpleNamespace(
@@ -128,9 +130,10 @@ class SingleMPPILimo(Node):
         )
 
         scenario = self.declare_parameter("obstacle_scenario", "").value.upper()
-        self.corridor = scenario == "CORRIDOR"
+        self.physical_corridor = scenario == "CORRIDOR_PHYSICAL"
+        self.corridor = scenario in ("CORRIDOR", "CORRIDOR_PHYSICAL")
         self.static_multi = scenario == "B"
-        self.footprint_radius = 0.17 if self.static_multi else 0.0
+        self.footprint_radius = 0.17 if self.static_multi or self.physical_corridor else 0.0
         gap = self.declare_parameter("corridor_gap", 0.2).value
         self.experiment = gazebo_experiment(scenario, gap) if scenario else None
         predict = self.declare_parameter("predict_obstacles", True).value
@@ -140,13 +143,17 @@ class SingleMPPILimo(Node):
         if not math.isfinite(self.speed_scale) or self.speed_scale <= 0:
             raise ValueError("obstacle_speed_scale must be finite and positive")
 
-        if not self.corridor:
+        if not self.corridor or self.physical_corridor:
             self.cfg.dt = 0.1
             self.cfg.v_max = 0.2
             self.cfg.omega_max = 0.5
             self.cfg.noise_std = [0.08, 0.3]
             self.cfg.goal_tolerance = 0.15
             self.cfg.obs_dynamic = False
+
+        if self.physical_corridor:
+            self.cfg.v_max = 0.40
+            self.cfg.obs_dynamic = predict
 
         if self.static_multi:
             self.cfg.v_max = self.declare_parameter("b_v_max", 0.30).value
@@ -173,7 +180,7 @@ class SingleMPPILimo(Node):
                 f"Scenario {scenario}, prediction={self.cfg.obs_dynamic}, "
                 f"seed={self.cfg.seed}, v_max={self.cfg.v_max:.2f}m/s, "
                 f"omega_max={self.cfg.omega_max:.2f}rad/s"
-                + (f", footprint radius={self.footprint_radius:.2f}m" if self.static_multi else "")
+                + (f", footprint radius={self.footprint_radius:.2f}m" if self.footprint_radius else "")
                 + (f", corridor gap={gap:.2f}m, speed scale={self.speed_scale:.3f}" if self.corridor else "")
             )
 
@@ -219,7 +226,7 @@ class SingleMPPILimo(Node):
             missing.append("/clock (simulation time is not advancing)")
         self.last_clock_check = clock_now
         if self.last_odom_time is None or now - self.last_odom_time > 0.5:
-            missing.append("/model/limo_diff/odometry")
+            missing.append(self.pose_topic)
         for index in range(len(self.obstacle_cmds)):
             sample = self.obstacle_states.get(index)
             if sample is None or now - sample[2] > 0.5:
@@ -258,7 +265,7 @@ class SingleMPPILimo(Node):
 
         pose = PoseStamped()
         pose.header = msg.header
-        pose.header.frame_id = "odom"
+        pose.header.frame_id = self.path_frame
         pose.pose = msg.pose.pose
 
         self.actual_path.header.stamp = msg.header.stamp
@@ -277,7 +284,7 @@ class SingleMPPILimo(Node):
         stamp = self.get_clock().now().to_msg()
 
         goal = Marker()
-        goal.header.frame_id = "odom"
+        goal.header.frame_id = self.path_frame
         goal.header.stamp = stamp
         goal.ns = "mppi_goal"
         goal.id = 0
@@ -301,7 +308,7 @@ class SingleMPPILimo(Node):
         self.goal_pub.publish(goal)
 
         circle = Marker()
-        circle.header.frame_id = "odom"
+        circle.header.frame_id = self.path_frame
         circle.header.stamp = stamp
         circle.ns = "mppi_tolerance"
         circle.id = 0
@@ -362,7 +369,7 @@ class SingleMPPILimo(Node):
             )[0]
 
         path = NavPath()
-        path.header.frame_id = "odom"
+        path.header.frame_id = self.path_frame
         path.header.stamp = stamp
 
         for x, y, yaw in predicted:
@@ -407,7 +414,7 @@ class SingleMPPILimo(Node):
 
         for marker_id, sample_idx in enumerate(indices):
             marker = Marker()
-            marker.header.frame_id = "odom"
+            marker.header.frame_id = self.path_frame
             marker.header.stamp = stamp
 
             marker.ns = "mppi_samples"
@@ -447,7 +454,7 @@ class SingleMPPILimo(Node):
 
         # 이전 프레임에서 남은 Marker 제거
         delete_marker = Marker()
-        delete_marker.header.frame_id = "odom"
+        delete_marker.header.frame_id = self.path_frame
         delete_marker.header.stamp = stamp
         delete_marker.action = Marker.DELETEALL
 
@@ -463,7 +470,7 @@ class SingleMPPILimo(Node):
         particles = trajectories[:, future_step, :2]
 
         marker = Marker()
-        marker.header.frame_id = "odom"
+        marker.header.frame_id = self.path_frame
         marker.header.stamp = stamp
         marker.ns = "mppi_particles"
         marker.id = 0
@@ -556,7 +563,7 @@ class SingleMPPILimo(Node):
             self.cfg.goal = self.goal.tolist()
             self.publish_goal_markers()
 
-            if not self.corridor:
+            if not self.corridor or self.physical_corridor:
                 self.controller.controls[:, 0] = 0.1
                 self.controller.controls[:, 1] = 0.0
 
@@ -589,7 +596,7 @@ class SingleMPPILimo(Node):
             self.min_clearance = min(self.min_clearance, clearance)
             self.clearance_pub.publish(Float32(data=clearance))
             if clearance <= 0.0:
-                self.finish("Estimated footprint overlap." if self.static_multi
+                self.finish("Estimated footprint overlap." if self.footprint_radius
                             else "Robot center entered an obstacle radius.")
                 return
 
@@ -604,7 +611,7 @@ class SingleMPPILimo(Node):
             return
 
         time_limit = self.cfg.max_steps * self.cfg.dt if self.corridor else 30.0
-        if self.static_multi:
+        if self.static_multi or self.physical_corridor:
             time_limit = 60.0
         if elapsed >= time_limit:
             self.finish("Maximum test duration reached.")
