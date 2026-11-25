@@ -169,10 +169,9 @@ if [[ -n ${MPPI_RVIZ_CONFIG:-} ]]; then
   rviz_args=(-d "$MPPI_RVIZ_CONFIG")
 fi
 if [[ $scenario == CORRIDOR_PHYSICAL ]]; then
-  if [[ -z ${MPPI_RVIZ_CONFIG:-} ]]; then
-    rviz_args=(-d "$PWD/rviz/single_mppi.rviz")
-  fi
-  rviz_args+=(-f world)
+  rviz_config=${MPPI_RVIZ_CONFIG:-"$PWD/rviz/single_mppi.rviz"}
+  sed -E 's/^([[:space:]]*Fixed Frame:).*/\1 world/' "$rviz_config" > "$logs/physical-corridor.rviz"
+  rviz_args=(-d "$logs/physical-corridor.rviz")
 fi
 setsid rviz2 "${rviz_args[@]}" --ros-args -p use_sim_time:=true > "$logs/rviz.log" 2>&1 &
 session_pids+=("$!")
