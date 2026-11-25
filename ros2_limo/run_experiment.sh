@@ -72,7 +72,11 @@ wait_for_topic() {
 }
 
 prepare_trial() {
-  start_trial_process "$trial_logs/gazebo-server.log" gz sim -s -r -v 4 empty.sdf
+  local world_file=empty.sdf
+  if [[ $scenario == CORRIDOR ]]; then
+    world_file="$PWD/ros2_limo/corridor_world.sdf"
+  fi
+  start_trial_process "$trial_logs/gazebo-server.log" gz sim -s -r -v 4 "$world_file"
   local server_pid=${trial_pids[0]}
   local ready=false
   local services_log="$trial_logs/gazebo-services.log"
