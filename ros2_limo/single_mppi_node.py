@@ -129,6 +129,8 @@ class SingleMPPILimo(Node):
 
         scenario = self.declare_parameter("obstacle_scenario", "").value.upper()
         self.corridor = scenario == "CORRIDOR"
+        self.static_multi = scenario == "B"
+        self.footprint_radius = 0.17 if self.static_multi else 0.0
         gap = self.declare_parameter("corridor_gap", 0.2).value
         self.experiment = gazebo_experiment(scenario, gap) if scenario else None
         predict = self.declare_parameter("predict_obstacles", True).value
@@ -137,6 +139,14 @@ class SingleMPPILimo(Node):
         self.speed_scale = self.declare_parameter("obstacle_speed_scale", 1.0).value
         if not math.isfinite(self.speed_scale) or self.speed_scale <= 0:
             raise ValueError("obstacle_speed_scale must be finite and positive")
+
+        if not self.corridor:
+            self.cfg.dt = 0.1
+            self.cfg.v_max = 0.2
+            self.cfg.omega_max = 0.5
+            self.cfg.noise_std = [0.08, 0.3]
+            self.cfg.goal_tolerance = 0.15
+            self.cfg.obs_dynamic = False
 
         self.obstacle_states = {}
         self.obstacle_cmds = []
@@ -154,15 +164,9 @@ class SingleMPPILimo(Node):
             self.get_logger().info(
                 f"Scenario {scenario}, prediction={self.cfg.obs_dynamic}, "
                 f"seed={self.cfg.seed}"
+                + (f", footprint radius={self.footprint_radius:.2f}m" if self.static_multi else "")
                 + (f", corridor gap={gap:.2f}m, speed scale={self.speed_scale:.3f}" if self.corridor else "")
             )
-        else:
-            self.cfg.dt = 0.1
-            self.cfg.v_max = 0.2
-            self.cfg.omega_max = 0.5
-            self.cfg.noise_std = [0.08, 0.3]
-            self.cfg.goal_tolerance = 0.15
-            self.cfg.obs_dynamic = False
 
         self.state = None
         self.last_odom_time = None
@@ -536,7 +540,7 @@ class SingleMPPILimo(Node):
             self.cfg.goal = self.goal.tolist()
             self.publish_goal_markers()
 
-            if not self.experiment:
+            if not self.corridor:
                 self.controller.controls[:, 0] = 0.1
                 self.controller.controls[:, 1] = 0.0
 
@@ -560,6 +564,7 @@ class SingleMPPILimo(Node):
             velocities = np.zeros((len(obstacles), 2))
             for index in range(len(self.obstacle_cmds)):
                 obstacles[index], velocities[index], _ = self.obstacle_states[index]
+            obstacles[:, 2] += self.footprint_radius
             self.controller.obstacles = obstacles
             self.controller.velocities = velocities
             clearance = float(np.min(
@@ -568,7 +573,8 @@ class SingleMPPILimo(Node):
             self.min_clearance = min(self.min_clearance, clearance)
             self.clearance_pub.publish(Float32(data=clearance))
             if clearance <= 0.0:
-                self.finish("Robot center entered an obstacle radius.")
+                self.finish("Estimated footprint overlap." if self.static_multi
+                            else "Robot center entered an obstacle radius.")
                 return
 
         distance = np.linalg.norm(
@@ -581,7 +587,9 @@ class SingleMPPILimo(Node):
             )
             return
 
-        time_limit = self.cfg.max_steps * self.cfg.dt if self.experiment else 30.0
+        time_limit = self.cfg.max_steps * self.cfg.dt if self.corridor else 30.0
+        if self.static_multi:
+            time_limit = 60.0
         if elapsed >= time_limit:
             self.finish("Maximum test duration reached.")
             return
