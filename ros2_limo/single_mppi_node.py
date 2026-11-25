@@ -188,6 +188,17 @@ class SingleMPPILimo(Node):
         self.last_odom_time = None
         self.controller = None
         self.goal = None
+        self.corridor_waypoints = []
+        if self.physical_corridor:
+            moving, _, wall, _ = self.experiment["obstacles"]
+            stop_y = self.experiment["y_limits"][0][0]
+            lane_y = (stop_y + moving[2] + wall[1] - wall[2]) / 2.0
+            x = moving[0]
+            self.corridor_waypoints = [
+                np.array([x - 1.0, lane_y]),
+                np.array([x + 0.9, lane_y]),
+            ]
+            self.get_logger().info(f"Guided corridor: positive-y lane at y={lane_y:.3f}m")
         self.started_at = None
         self.finished = False
         self.step_count = 0
@@ -616,6 +627,15 @@ class SingleMPPILimo(Node):
         if elapsed >= time_limit:
             self.finish("Maximum test duration reached.")
             return
+
+        if self.physical_corridor:
+            if self.corridor_waypoints and np.linalg.norm(
+                self.state[:2] - self.corridor_waypoints[0]
+            ) <= self.cfg.goal_tolerance:
+                reached = self.corridor_waypoints.pop(0)
+                self.get_logger().info(f"Corridor waypoint reached: {reached.tolist()}")
+            target = self.corridor_waypoints[0] if self.corridor_waypoints else self.goal
+            self.cfg.goal = target.tolist()
 
         start_compute = time.monotonic()
 
