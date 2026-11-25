@@ -210,7 +210,6 @@ class SingleMPPILimo(Node):
         self.goal = None
         self.corridor_waypoints = []
         self.aligning_at_entrance = False
-        self.aligning_on_approach = False
         self.previous_lane_xy = None
         if self.physical_corridor:
             moving, _, wall, _ = self.experiment["obstacles"]
@@ -753,19 +752,6 @@ class SingleMPPILimo(Node):
                 self.cfg.omega_max
             )
         )
-
-        if self.physical_corridor and len(self.corridor_waypoints) == 3:
-            threshold = 15 if self.aligning_on_approach else 35
-            self.aligning_on_approach = abs(heading_error) > math.radians(threshold)
-            if self.aligning_on_approach:
-                cmd.linear.x = 0.0
-                cmd.angular.z = float(np.clip(1.5 * heading_error,
-                                             -self.cfg.omega_max, self.cfg.omega_max))
-                self.controller.controls[:, 0] = 0.0
-                self.controller.controls[:, 1] = cmd.angular.z
-            else:
-                # Reduce forward motion while the robot is still turning toward the entrance.
-                cmd.linear.x *= max(0.0, 1.0 - abs(heading_error) / math.radians(45))
 
         if self.corridor:
             self.command_obstacles()
