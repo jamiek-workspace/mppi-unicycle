@@ -646,7 +646,9 @@ class SingleMPPILimo(Node):
             return
 
         time_limit = self.cfg.max_steps * self.cfg.dt if self.corridor else 30.0
-        if self.static_multi or self.physical_corridor:
+        if self.physical_corridor:
+            time_limit = 90.0
+        elif self.static_multi:
             time_limit = 60.0
         if elapsed >= time_limit:
             self.finish("Maximum test duration reached.")
