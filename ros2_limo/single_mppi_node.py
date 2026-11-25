@@ -209,6 +209,8 @@ class SingleMPPILimo(Node):
         self.controller = None
         self.goal = None
         self.corridor_waypoints = []
+        self.aligning_at_entrance = False
+        self.previous_lane_xy = None
         if self.physical_corridor:
             moving, _, wall, _ = self.experiment["obstacles"]
             stop_y = self.experiment["y_limits"][0][0]
@@ -216,6 +218,7 @@ class SingleMPPILimo(Node):
             x = moving[0]
             self.corridor_waypoints = [
                 np.array([x - 1.0, lane_y]),
+                np.array([x, lane_y]),
                 np.array([x + 0.9, lane_y]),
             ]
             self.get_logger().info(f"Guided corridor: positive-y lane at y={lane_y:.3f}m")
@@ -636,7 +639,7 @@ class SingleMPPILimo(Node):
             self.state[:2] - self.goal
         )
 
-        if distance <= self.cfg.goal_tolerance:
+        if not self.corridor_waypoints and distance <= self.cfg.goal_tolerance:
             self.finish(
                 f"Goal reached! Distance: {distance:.3f} m"
             )
@@ -650,14 +653,52 @@ class SingleMPPILimo(Node):
             return
 
         if self.physical_corridor:
-            if self.corridor_waypoints and np.linalg.norm(
-                self.state[:2] - self.corridor_waypoints[0]
-            ) <= self.cfg.goal_tolerance:
-                reached = self.corridor_waypoints.pop(0)
-                self.get_logger().info(f"Corridor waypoint reached: {reached.tolist()}")
-            target = self.corridor_waypoints[0] if self.corridor_waypoints else self.goal
+            points = self.corridor_waypoints
+            if len(points) == 3 and np.linalg.norm(self.state[:2] - points[0]) <= self.cfg.goal_tolerance:
+                reached = points.pop(0)
+                self.aligning_at_entrance = True
+                self.get_logger().info(f"Corridor entrance reached: {reached.tolist()}; aligning to +x")
+
+            if self.aligning_at_entrance:
+                error = float(wrap_angle(-self.state[2]))
+                self.command_obstacles()
+                cmd = Twist()
+                if abs(error) > math.radians(8):
+                    cmd.angular.z = float(np.clip(1.5 * error, -self.cfg.omega_max, self.cfg.omega_max))
+                    self.cmd_pub.publish(cmd)
+                    return
+                self.cmd_pub.publish(cmd)
+                self.controller.controls[:, 0] = 0.1
+                self.controller.controls[:, 1] = 0.0
+                self.aligning_at_entrance = False
+                self.previous_lane_xy = self.state[:2].copy()
+                self.get_logger().info(f"Corridor aligned: heading_error={math.degrees(error):+.1f}deg")
+                return
+
+            if 0 < len(points) <= 2:
+                x, y = self.state[:2]
+                section_x, lane_y = points[0]
+                if x >= section_x:
+                    previous_x, previous_y = self.previous_lane_xy
+                    section_y = y
+                    if previous_x < section_x:
+                        fraction = (section_x - previous_x) / (x - previous_x)
+                        section_y = previous_y + fraction * (y - previous_y)
+                    cross_track = section_y - lane_y
+                    if abs(cross_track) > 0.15:
+                        self.finish(f"Corridor section missed: x={section_x:.2f}m, lateral_error={cross_track:+.3f}m")
+                        return
+                    points.pop(0)
+                    self.get_logger().info(
+                        f"Corridor section passed: x={section_x:.2f}m, lateral_error={cross_track:+.3f}m"
+                    )
+                self.previous_lane_xy = self.state[:2].copy()
+
+            # Track toward the exit continuously. The midpoint is a crossing
+            # checkpoint, so the controller never brakes to reach that point.
+            target = points[-1] if 0 < len(points) <= 2 else (points[0] if points else self.goal)
             self.cfg.goal = target.tolist()
-            self.controller.lane_y = float(target[1]) if len(self.corridor_waypoints) == 1 else None
+            self.controller.lane_y = float(target[1]) if 0 < len(points) <= 2 else None
             dx, dy = target - self.state[:2]
             heading = math.atan2(dy, dx) if self.controller.lane_y is None else 0.0
             heading_error = float(wrap_angle(heading - self.state[2]))
@@ -730,6 +771,8 @@ class SingleMPPILimo(Node):
                 + (f" | active_goal=({target[0]:.2f}, {target[1]:.2f})"
                    f" | active_distance={math.hypot(dx, dy):.3f}m"
                    f" | heading_error={math.degrees(heading_error):+.1f}deg"
+                   + (f" | lateral_error={self.state[1] - target[1]:+.3f}m"
+                      if self.controller.lane_y is not None else "")
                    if self.physical_corridor else "")
             )
 
